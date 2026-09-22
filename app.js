@@ -1,4 +1,4 @@
-import { calculate, parseDecimal, correction } from './calc.js';
+import { calculate, parseDecimal, correction } from './calc.js?v=3';
 
 const KEY = 'liner-calculator-v1';
 const app = document.querySelector('#app');
