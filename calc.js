@@ -1,0 +1,33 @@
+// Cross-dial arrangement: U starts above stationary hub, L below motor hub.
+// Both indicators read positive when their plungers are depressed.
+export function parseDecimal(value, { signed = false } = {}) {
+  const text = String(value ?? '').trim();
+  const pattern = signed ? /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/ : /^(?:\d+(?:\.\d*)?|\.\d+)$/;
+  if (!pattern.test(text)) throw new Error('숫자를 빠짐없이 입력해 주세요.');
+  const number = Number(text);
+  if (!Number.isFinite(number)) throw new Error('입력한 숫자를 확인해 주세요.');
+  return number;
+}
+
+export function calculate({ a, b, c, upper, lower, sagUpper = 0, sagLower = 0, resolution = .01 }) {
+  if (![a, b, c, sagUpper, sagLower, resolution, ...upper, ...lower].every(Number.isFinite)) throw new Error('입력한 숫자를 확인해 주세요.');
+  if (a <= 0 || b < 0 || c <= 0) throw new Error('A와 C는 0보다 커야 합니다. B는 0 이상이어야 합니다.');
+  if (upper.length !== 3 || lower.length !== 3 || resolution <= 0) throw new Error('세 위치의 측정값을 모두 입력해 주세요.');
+  // Arrays are [90, 180, 270] degrees of assembly rotation; initial readings are 0.
+  // Sag is a SIGNED differential measured in each indicator's own start -> 180 path.
+  const s = (upper[1] - sagUpper) / 2;
+  const m = (lower[1] - sagLower) / 2;
+  const slope = (m - s) / a;
+  const front = -(m + slope * b);
+  const rear = -(m + slope * (b + c));
+  const checks = [upper, lower].map(readings => Math.abs(readings[0] + readings[2] - readings[1]));
+  const checkLimit = 2 * resolution;
+  if (![front, rear, s, m, slope, ...checks, checkLimit].every(Number.isFinite)) throw new Error('숫자가 너무 큽니다. 입력값을 확인해 주세요.');
+  return { front, rear, s, m, slope, checks, checkLimit, consistent: checks.every(error => error <= checkLimit + 1e-9) };
+}
+
+export function correction(value) {
+  // Display precision is not an alignment acceptance tolerance.
+  const rounded = Math.round(Math.abs(value) * 1000) / 1000;
+  return { amount: rounded.toFixed(3), action: rounded === 0 ? '표시값 0.000 mm' : value > 0 ? '넣기' : '빼기', kind: value < 0 ? 'remove' : 'add' };
+}
