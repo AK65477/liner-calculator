@@ -1,23 +1,27 @@
-import { calculate, parseDecimal, correction, sideMove, assess, TOLERANCES } from './calc.js?v=4';
+import { calculate, parseDecimal, correction, sideMove, assess, TOLERANCES } from './calc.js?v=5';
+import * as store from './store.js?v=5';
 
-const KEY = 'liner-calculator-v1';
 const app = document.querySelector('#app');
 const empty = () => ({ step: 0, angle: 0, unit: 'mm', dims: { a: '', b: '', c: '' }, readings: { upper: ['', '', ''], lower: ['', '', ''] }, signs: { upper: [1, 1, 1], lower: [1, 1, 1] }, setup: false, positive: false, sagMode: 'unknown', sagUpper: '', sagLower: '', side90: '', rpm: '' });
-let storageOK = true;
-let saved = null;
-try {
-  const data = JSON.parse(localStorage.getItem(KEY) || 'null');
-  if (data?.version === 1 && data.state) {
-    const s = data.state;
-    if ([s.readings?.upper, s.readings?.lower, s.signs?.upper, s.signs?.lower].every(x => Array.isArray(x) && x.length === 3)
-      && s.dims && [s.dims.a, s.dims.b, s.dims.c, s.sagUpper, s.sagLower, ...s.readings.upper, ...s.readings.lower].every(x => typeof x === 'string' && x.length <= 32)
-      && [...s.signs.upper, ...s.signs.lower].every(x => x === 1 || x === -1)
-      && ['mm', 'div'].includes(s.unit) && ['unknown', 'measured', 'compensated'].includes(s.sagMode)
-      && Number.isInteger(s.step) && s.step >= 0 && s.step <= 4 && Number.isInteger(s.angle) && s.angle >= 0 && s.angle <= 2
-      && typeof s.setup === 'boolean' && typeof s.positive === 'boolean'
-      && ['', 'right', 'left'].includes(s.side90 ?? '') && ['', ...TOLERANCES.map(t => t.id)].includes(s.rpm ?? '')) saved = { ...s, side90: s.side90 ?? '', rpm: s.rpm ?? '' };
-  }
-} catch { storageOK = false; }
+function validInput(s) {
+  return Boolean(s) && [s.readings?.upper, s.readings?.lower, s.signs?.upper, s.signs?.lower].every(x => Array.isArray(x) && x.length === 3)
+    && Boolean(s.dims) && [s.dims.a, s.dims.b, s.dims.c, s.sagUpper, s.sagLower, ...s.readings.upper, ...s.readings.lower].every(x => typeof x === 'string' && x.length <= 32)
+    && [...s.signs.upper, ...s.signs.lower].every(x => x === 1 || x === -1)
+    && ['mm', 'div'].includes(s.unit) && ['unknown', 'measured', 'compensated'].includes(s.sagMode)
+    && Number.isInteger(s.step) && s.step >= 0 && s.step <= 4 && Number.isInteger(s.angle) && s.angle >= 0 && s.angle <= 2
+    && typeof s.setup === 'boolean' && typeof s.positive === 'boolean'
+    && ['', 'right', 'left'].includes(s.side90 ?? '') && ['', ...TOLERANCES.map(t => t.id)].includes(s.rpm ?? '');
+}
+// Older saves may lack side90/rpm; fill them while validating.
+const validStored = s => validInput(s) && ((s.side90 ??= ''), (s.rpm ??= ''), true);
+let storage;
+try { storage = window.localStorage; } catch { storage = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } }; }
+const loaded = store.load(storage, validStored);
+const db = loaded.db;
+let storageOK = loaded.ok;
+let notice = loaded.notice || '';
+let view = 'home';
+let openJob = '';
 let state = empty();
 let demo = false;
 let message = '';
@@ -25,11 +29,22 @@ const ANGLES = [90, 180, 270];
 const TURNS = ['¼바퀴', '반 바퀴', '¾바퀴'];
 const DIALS = { upper: { tag: '처음 위', target: '고정측 측정' }, lower: { tag: '처음 아래', target: '모터측 측정' } };
 const esc = text => String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// The live input belongs to the current round; leaving the result screen voids its snapshot.
 function persist() {
-  if (demo) return;
-  saved = structuredClone(state);
-  try { localStorage.setItem(KEY, JSON.stringify({ version: 1, state })); }
-  catch { storageOK = false; }
+  if (demo || !state.step) return;
+  const cur = store.current(db);
+  if (!cur) return;
+  cur.round.input = structuredClone(state);
+  if (state.step < 4) cur.round.result = null;
+  if (!store.save(storage, db)) storageOK = false;
+}
+const dateText = iso => { const d = new Date(iso); return `${d.getMonth()+1}월 ${d.getDate()}일 ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
+const equipmentName = eq => eq?.name || '이름 없는 설비';
+function roundSummary(r) {
+  if (!r.result) return r.input.step > 0 ? '입력 중' : '';
+  if (!r.result.consistent) return '게이지 값 불일치';
+  const liner = (name, v) => { const x = correction(v); return `${name} ${x.amount} ${x.kind === 'remove' ? '빼기' : x.amount === '0.000' ? '그대로' : '넣기'}`; };
+  return `${liner('앞발', r.result.front)} · ${liner('뒷발', r.result.rear)}`;
 }
 function diagram() {
   return `<svg class="diagram" viewBox="0 0 620 290" role="img" aria-label="왼쪽 고정측, 오른쪽 모터. 처음 위 게이지는 고정측, 처음 아래 게이지는 모터측 측정. A는 두 게이지 침 사이, B는 모터측 침 자리부터 앞발 볼트, C는 앞발부터 뒷발 볼트.">
@@ -54,12 +69,12 @@ function navigation(nextText = '다음') {
 }
 function render(focus = true) {
   let content = '';
-  if (!state.step) content = home();
+  if (!state.step) content = view === 'records' ? records() : view === 'job' ? jobDetail() : home();
   if (state.step === 1) content = setup();
   if (state.step === 2) content = dimensions();
   if (state.step === 3) content = readings();
   if (state.step === 4) content = results();
-  app.innerHTML = `${demo ? '<div class="demo-banner">연습 모드 · 예시 숫자</div>' : ''}${!storageOK ? '<p class="notice storage-warning">이 브라우저는 저장 불가. 결과를 따로 기록.</p>' : ''}${state.step ? progress() : ''}${content}${state.step ? `<p class="saved">${demo ? '연습값은 저장 안 함' : storageOK ? '입력값 자동 저장' : '입력값 저장 안 됨'}</p><button class="plain" data-action="home">${demo ? '연습 종료' : '처음 화면'}</button>` : ''}`;
+  app.innerHTML = `${demo ? '<div class="demo-banner">연습 모드 · 예시 숫자</div>' : ''}${!storageOK ? '<p class="notice storage-warning">이 브라우저는 저장 불가. 결과를 따로 기록.</p>' : ''}${state.step ? roundLabel() + progress() : ''}${content}${state.step ? `<p class="saved">${demo ? '연습값은 저장 안 함' : storageOK ? '입력값 자동 저장' : '입력값 저장 안 됨'}</p><button class="plain" data-action="home">${demo ? '연습 종료' : '처음 화면'}</button>` : ''}`;
   if (focus) { const heading = app.querySelector('h1'); heading?.setAttribute('tabindex', '-1'); heading?.focus({ preventScroll: true }); window.scrollTo(0, 0); }
 }
 function errorSlot() { return `<div id="error" role="alert">${message ? `<p class="error">${esc(message)}</p>` : ''}</div>`; }
@@ -79,13 +94,54 @@ function showError(text, fieldId) {
     if (target.tagName === 'INPUT') target.focus({ preventScroll: true });
   } else region?.scrollIntoView({ block: 'center', behavior: 'auto' });
 }
+function roundLabel() {
+  if (demo) return '';
+  const cur = store.current(db);
+  return cur ? `<p class="round-label">${esc(equipmentName(cur.equipment))} · ${cur.number}차 측정</p>` : '';
+}
+function noticeText() {
+  if (notice === 'migrated') return '<p class="notice">예전 측정값을 기록으로 옮김. 「지난 기록」에서 확인.</p>';
+  if (notice === 'unreadable') return '<p class="notice">저장된 기록을 읽지 못해 새로 시작. 예전 자료는 휴대폰 안에 따로 보관.</p>';
+  return '';
+}
+// Work menu. Only finished tools appear here; new modules are added as they are ready.
 function home() {
-  const resumable = saved && saved.step > 0;
-  return `<h1>모터 라이너 계산</h1><p class="lead">리버스 다이얼 게이지 · 앞발/뒷발 증감량</p>
-  <div class="stack intro-actions">${resumable ? '<button class="primary" data-action="resume">하던 측정 계속</button>' : ''}<button class="${resumable ? 'secondary' : 'primary'}" data-action="new">새 측정</button><button class="secondary" data-action="demo">연습 (예시 숫자)</button></div>
+  const cur = store.current(db);
+  const resumable = cur && cur.round.input.step > 0;
+  return `<h1>현장 정비</h1>${noticeText()}
+  ${resumable ? `<div class="stack intro-actions"><button class="primary resume" data-action="resume">하던 측정 계속<span class="resume-detail">${esc(equipmentName(cur.equipment))} · ${cur.number}차 · ${dateText(cur.round.createdAt)}</span></button></div>` : ''}
+  <section class="card module"><h2>축정렬 · 라이너</h2><p class="helper">리버스 다이얼 게이지 · 앞발/뒷발 라이너 증감, 좌우 이동</p>
+  <div class="stack"><button class="${resumable ? 'secondary' : 'primary'}" data-action="new">새 측정</button><button class="secondary" data-action="demo">연습 (예시 숫자)</button></div></section>
+  ${db.jobs.length ? `<button class="secondary" data-action="records">지난 기록 (${db.jobs.length}건)</button>` : ''}
   <div class="notice"><strong>시험용.</strong> 결과는 기존 계산과 대조 후 사용.</div>
-  <div class="card intro-diagram"><h2>게이지 배치</h2><div class="diagram-box">${diagram()}</div><p class="helper">위 게이지 → 고정측 측정<br>아래 게이지 → 모터측 측정<br>이 자세에서 두 게이지 0점</p></div>
+  <details><summary>게이지 배치</summary><div class="diagram-box">${diagram()}</div><p class="helper">위 게이지 → 고정측 측정<br>아래 게이지 → 모터측 측정<br>이 자세에서 두 게이지 0점</p></details>
   <details><summary>순서</summary><ol class="steps"><li>거리 A·B·C 입력 (mm)</li><li>90°·180°·270° 게이지 값 입력</li><li>앞발·뒷발 라이너 증감량 확인</li></ol><p class="helper">앞발 = 커플링 쪽 발, 뒷발 = 반대쪽 발</p></details>`;
+}
+function records() {
+  const jobs = [...db.jobs].reverse();
+  return `<h1>지난 기록</h1><p class="lead">이 휴대폰에 저장된 측정</p>
+  <div class="stack">${jobs.map(job => { const last = job.rounds[job.rounds.length - 1]; const eq = store.equipmentOf(db, job);
+    return `<button class="record-row" data-action="open-job" data-job="${esc(job.id)}"><span class="record-name">${esc(equipmentName(eq))}</span><span class="record-meta">${dateText(job.createdAt)} · 측정 ${job.rounds.length}회</span><span class="record-meta">${esc(roundSummary(last) || '값 없음')}</span></button>`; }).join('')}</div>
+  <button class="plain" data-action="home">처음 화면</button>`;
+}
+function jobDetail() {
+  const job = db.jobs.find(j => j.id === openJob);
+  if (!job) { view = 'records'; return records(); }
+  const eq = store.equipmentOf(db, job);
+  const last = job.rounds[job.rounds.length - 1];
+  return `<h1>${esc(equipmentName(eq))}</h1><p class="lead">${dateText(job.createdAt)} 시작</p>
+  <div class="card"><div class="field"><label for="equipment-name">설비 이름 <span class="tiny">(선택)</span></label><input id="equipment-name" data-equipment="${esc(eq.id)}" type="text" maxlength="60" autocomplete="off" value="${esc(eq.name)}" placeholder="예: 2호 송풍기"></div></div>
+  ${job.rounds.map((r, i) => `<section class="card round"><h2>${i + 1}차 측정 <span class="tiny">${dateText(r.createdAt)}</span></h2>${roundFacts(r)}</section>`).join('')}
+  <div class="stack">${last.result ? '<button class="primary" data-action="remeasure-job">이 설비 재측정</button>' : `<button class="primary" data-action="open-round" data-round="${esc(last.id)}">${job.rounds.length}차 측정 이어서 입력</button>`}</div>
+  <button class="plain" data-action="records">지난 기록</button>`;
+}
+function roundFacts(r) {
+  if (!r.result) return `<p class="helper">${r.input.step > 0 ? '입력 중. 결과 전.' : '값 없음.'}</p>`;
+  if (!r.result.consistent) return '<p class="helper">게이지 값 불일치로 결과 없음.</p>';
+  const liner = v => { const x = correction(v); return `${x.amount} mm ${x.kind === 'remove' ? '빼기' : x.amount === '0.000' ? '그대로' : '넣기'}`; };
+  const side = v => { const x = sideMove(v); return `${x.amount} mm ${x.action}`; };
+  const h = r.result.horizontal;
+  return `<div class="facts"><div><span>앞발 라이너</span><span>${liner(r.result.front)}</span></div><div><span>뒷발 라이너</span><span>${liner(r.result.rear)}</span></div>${h ? `<div><span>앞발 좌우</span><span>${side(h.front)}</span></div><div><span>뒷발 좌우</span><span>${side(h.rear)}</span></div>` : ''}<div><span>거리 A / B / C</span><span>${esc(r.input.dims.a)} / ${esc(r.input.dims.b)} / ${esc(r.input.dims.c)} mm</span></div></div><p class="tiny">계산 권장량. 실제 넣고 뺀 양은 아직 기록 안 함.</p>`;
 }
 function setup() {
   return `<h1>게이지 배치 확인</h1><p class="lead">옆에서 본 그림. 모터가 오른쪽.</p><form id="setup-form"><div class="card"><div class="diagram-box">${diagram()}</div>
@@ -135,7 +191,7 @@ function results() {
   <p class="helper">앞발 2개 동일, 뒷발 2개 동일. 빼는 양이 현재 라이너보다 크면 그대로 적용 불가. 높이 먼저, 좌우 나중. 조정 후 재측정.</p>
   ${judgement(result)}${facts}
   <details><summary>계산 방법</summary><p class="helper">처음 위 게이지 값 → 고정측 자리의 높이 차, 처음 아래 게이지 값 → 모터측 자리의 높이 차. 두 점을 직선으로 이어 앞발·뒷발 위치까지 연장, 그 높이 차를 없애는 양이 조정량.</p><a href="./method.html">공식과 검산 자료</a></details>
-  <div class="stack"><button class="primary" data-action="remeasure">같은 거리로 재측정</button></div>`;
+  <div class="stack"><button class="primary" data-action="remeasure">${remeasureText()}</button></div>`;
 }
 function judgement(result) {
   const picker = `<div class="rpm-options" role="group" aria-label="모터 회전수">${TOLERANCES.map(t => `<button type="button" data-rpm="${t.id}" aria-pressed="${state.rpm === t.id}">${t.label}</button>`).join('')}</div>`;
@@ -151,18 +207,30 @@ function judgement(result) {
   <p class="helper">평행 = 두 게이지 침 가운데 지점(커플링 중심으로 봄)의 축 어긋남. 각도 = 100 mm당 기울기 차. 제조사 기준이 없을 때 쓰는 일반 표(Fixturlaser). 설비·제조사 기준이 우선. 열팽창 목표 0 가정.</p></section>`;
 }
 function signed(n) { return `${n < 0 ? '−' : '+'}${Math.abs(n).toFixed(3)}`; }
+function remeasureText() { const cur = !demo && store.current(db); return cur ? `같은 설비 재측정 (${cur.job.rounds.length + 1}차)` : '같은 거리로 재측정'; }
 function changeStep(step) { state.step=step; message=''; persist(); render(); }
-function startNew(reuse = true) {
-  const previous = demo ? state : saved;
+// Same machine, next round: keep the mounting conditions, clear the gauge values.
+function carryOver(previous) {
   const next = empty(); next.step=1;
-  if (reuse && previous) { next.dims={...previous.dims}; next.unit=previous.unit; next.sagMode=previous.sagMode; next.sagUpper=previous.sagUpper; next.sagLower=previous.sagLower; next.setup=previous.setup; next.positive=previous.positive; next.side90=previous.side90||''; next.rpm=previous.rpm||''; }
-  state=next; message=''; persist(); render();
+  next.dims={...previous.dims}; next.unit=previous.unit; next.sagMode=previous.sagMode; next.sagUpper=previous.sagUpper; next.sagLower=previous.sagLower; next.setup=previous.setup; next.positive=previous.positive; next.side90=previous.side90||''; next.rpm=previous.rpm||'';
+  return next;
+}
+// A new job starts clean: another machine must not inherit distances or sag values.
+function startJob() {
+  const last = db.jobs.length ? db.jobs[db.jobs.length-1].rounds.at(-1).input : null;
+  state = empty(); state.step = 1; if (last) state.unit = last.unit;
+  store.newJob(db, structuredClone(state)); demo=false; message=''; persist(); render();
+}
+function startRound(jobId, previous) {
+  state = carryOver(previous);
+  store.addRound(db, jobId, structuredClone(state)); demo=false; message=''; persist(); render();
 }
 function highlightDim(letter) {
   app.querySelectorAll('.dim-box').forEach(g => g.classList.toggle('active', g.dataset.dim === letter));
 }
 app.addEventListener('click', event => {
   const button=event.target.closest('button'); if (!button) return;
+  notice='';
   if (button.dataset.sign) {
     const dial=button.dataset.dial; state.signs[dial][state.angle]=Number(button.dataset.sign); persist();
     button.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));
@@ -187,19 +255,24 @@ app.addEventListener('click', event => {
     } return;
   }
   switch(button.dataset.action){
-    case 'new': if(saved?.step>0&&!confirm('하던 측정값을 지우고 새로 시작합니까? (거리값은 유지)'))return; demo=false; startNew(); break;
-    case 'resume': demo=false; state=structuredClone(saved); render(); break;
-    case 'home': demo=false; state=empty(); message=''; render(); break;
+    case 'new': startJob(); break;
+    case 'resume': { const cur=store.current(db); if(!cur)break; demo=false; state=structuredClone(cur.round.input); message=''; render(); break; }
+    case 'home': demo=false; state=empty(); message=''; view='home'; render(); break;
+    case 'records': view='records'; render(); break;
+    case 'open-job': openJob=button.dataset.job; view='job'; render(); break;
+    case 'open-round': { const job=db.jobs.find(j=>j.id===openJob); const round=job?.rounds.find(r=>r.id===button.dataset.round); if(!round)break; db.current={jobId:job.id,roundId:round.id}; demo=false; state=structuredClone(round.input); if(!state.step)state.step=1; message=''; persist(); render(); break; }
+    case 'remeasure-job': { const job=db.jobs.find(j=>j.id===openJob); if(job)startRound(job.id, job.rounds.at(-1).input); break; }
     case 'demo': demo=true; state=empty(); state.step=1; state.setup=true; state.positive=true; state.dims={a:'200',b:'150',c:'300'}; state.readings={upper:['0.06','0.20','0.14'],lower:['0.10','0.40','0.30']}; state.side90='right'; state.rpm='1000-2000'; render(); break;
     case 'back': if(state.step===3&&state.angle>0){state.angle--;persist();message='';render();}else changeStep(state.step-1); break;
     case 'edit-readings': state.angle=0; changeStep(3); break;
     case 'edit-distance': changeStep(2); break;
     case 'edit-setup': changeStep(1); break;
-    case 'remeasure': if(confirm('거리값은 유지, 게이지 값만 지웁니까?'))startNew(); break;
+    case 'remeasure': if(demo){state=carryOver(state);message='';render();break;} { const cur=store.current(db); if(cur)startRound(cur.job.id, state); } break;
   }
 });
 app.addEventListener('input',event=>{
   const el=event.target;
+  if(el.dataset.equipment){const eq=db.equipment.find(e=>e.id===el.dataset.equipment);if(eq){eq.name=el.value.slice(0,60);if(!store.save(storage,db))storageOK=false;}return;}
   if(el.id.startsWith('dim-'))state.dims[el.name]=el.value;
   if(el.id.startsWith('read-'))state.readings[el.id.slice(5)][state.angle]=el.value;
   if(['sagUpper','sagLower'].includes(el.id))state[el.id]=el.value;
@@ -236,7 +309,7 @@ app.addEventListener('submit',event=>{
       for(const dial of ['upper','lower']){
         try{parseDecimal(state.readings[dial][state.angle]);}catch{throw new InputError(`${DIALS[dial].tag} 게이지 값 입력 필요. 0이면 0.`,`read-${dial}`);}
       }
-      if(state.angle<2){state.angle++;message='';persist();render();}else{calculate(inputModel());changeStep(4);}
+      if(state.angle<2){state.angle++;message='';persist();render();}else{const r=calculate(inputModel());const cur=!demo&&store.current(db);if(cur)cur.round.result=store.snapshot(r);changeStep(4);}
     }
   }catch(error){showError(error.message,error.field);}
 });

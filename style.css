@@ -17,3 +17,8 @@
 .judgement .facts span:first-child{white-space:nowrap}
 .card.invalid,.field.invalid{outline:4px solid #b64b40;outline-offset:4px}.field-error{margin:14px 0 0;padding:12px 14px;font-weight:700}
 .setup-points{margin:14px 0 6px;padding-left:24px}.setup-points li{margin:8px 0;font-weight:700}
+.round-label{margin:6px 0 0;font-size:.85rem;font-weight:750;color:var(--green)}
+.resume{display:grid;gap:2px;text-align:center}.resume-detail{font-size:.8rem;font-weight:500;opacity:.9}
+.module{margin-top:20px}.module h2{margin-bottom:2px}.module .stack{margin-top:14px}
+.record-row{display:grid;gap:2px;text-align:left;width:100%;background:#fff;border:1px solid var(--line);color:#142c29}.record-name{font-size:1.05rem;font-weight:800;color:var(--green)}.record-meta{font-size:.82rem;font-weight:500;color:var(--muted)}
+.round h2{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px}.round .facts{margin:8px 0}
