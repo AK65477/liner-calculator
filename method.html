@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>계산 기준 · 라이너 계산기</title><link rel="stylesheet" href="./style.css?v=5"></head>
-<body><header class="topbar"><a href="./">← 계산기로 돌아가기</a><span class="version">시험용 0.2</span></header><main>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>계산 기준 · 라이너 계산기</title><link rel="stylesheet" href="./style.css?v=7"></head>
+<body><header class="topbar"><div class="topbar-in"><a href="./">← 앱으로 돌아가기</a><span class="version">시험용 0.4</span></div></header><main>
 <h1>계산 기준</h1><div class="notice">수학 검산을 통과한 시험용입니다. 실제 게이지의 부호·장착·처짐값과 현장 계산 결과는 아직 대조하지 않았습니다.</div>
 <section class="card"><h2>적용하는 장착 방식</h2><p>모터를 조정 대상으로 둡니다. 처음 위 게이지 U는 모터에 고정된 지지대에서 고정측 허브 바깥둘레를 재고, 처음 아래 게이지 L은 고정측 지지대에서 모터측 허브 바깥둘레를 잽니다. 게이지 측정봉은 축 중심을 향합니다.</p><p>둘 다 측정봉이 눌리면 ＋입니다. 이 자세에서 두 눈금을 0으로 맞추고 두 축을 함께 돌립니다. U와 L 이름은 회전 후에도 유지합니다.</p></section>
 <section class="card"><h2>거리와 공식</h2><p>A: 두 접촉점 사이<br>B: 모터측 접촉점부터 앞발 볼트 중심<br>C: 앞발과 뒷발 볼트 중심 사이</p><p>거리와 측정값의 계산 단위는 모두 mm입니다. A, C &gt; 0이며 B ≥ 0인 배치만 지원합니다.</p><p>U, L은 처음 자세에서 반 바퀴 돌린 180° 값입니다. sU, sL은 같은 시작·끝 위치에서 별도로 측정한 부호 있는 처짐값입니다.</p><p>S = (U − sU) ÷ 2<br>M = (L − sL) ÷ 2<br>기울기 = (M − S) ÷ A</p><p>앞발 증감량 = −(M + 기울기 × B)<br>뒷발 증감량 = −(M + 기울기 × (B + C))</p><p>증감량이 양수면 넣기, 음수면 빼기입니다. ‘이미 보정됨’을 선택하면 처짐을 다시 빼지 않습니다. ‘모름’은 처짐을 0으로 가정한 미보정 참고값입니다.</p></section>

@@ -1,5 +1,5 @@
-import { calculate, parseDecimal, correction, sideMove, assess, TOLERANCES } from './calc.js?v=5';
-import * as store from './store.js?v=5';
+import { calculate, parseDecimal, correction, sideMove, assess, TOLERANCES } from './calc.js?v=7';
+import * as store from './store.js?v=7';
 
 const app = document.querySelector('#app');
 const empty = () => ({ step: 0, angle: 0, unit: 'mm', dims: { a: '', b: '', c: '' }, readings: { upper: ['', '', ''], lower: ['', '', ''] }, signs: { upper: [1, 1, 1], lower: [1, 1, 1] }, setup: false, positive: false, sagMode: 'unknown', sagUpper: '', sagLower: '', side90: '', rpm: '' });
@@ -30,6 +30,19 @@ const TURNS = ['¼바퀴', '반 바퀴', '¾바퀴'];
 const DIALS = { upper: { tag: '처음 위', target: '고정측 측정' }, lower: { tag: '처음 아래', target: '모터측 측정' } };
 const esc = text => String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The live input belongs to the current round; leaving the result screen voids its snapshot.
+// Touch feedback. Press shows on touch-down: Chrome delays :active, and most buttons
+// replace the screen on click before a release animation could be seen.
+let pressed = null;
+const release = () => { pressed?.classList.remove('is-pressed'); pressed = null; };
+document.addEventListener('pointerdown', event => { const button = event.target.closest('button'); if (!button || button.disabled) return; release(); pressed = button; button.classList.add('is-pressed'); });
+for (const type of ['pointerup', 'pointercancel', 'blur']) window.addEventListener(type, release);
+// Vibration patterns (Android only; iOS browsers ignore it): tap, result, input error.
+const HAPTIC_KEY = 'field-app-haptics';
+const canVibrate = typeof navigator.vibrate === 'function';
+let haptics = true;
+try { haptics = localStorage.getItem(HAPTIC_KEY) !== 'off'; } catch {}
+const BUZZ = { tap: 8, done: [14, 70, 14], fail: 45 };
+function buzz(kind) { if (canVibrate && haptics) try { navigator.vibrate(BUZZ[kind]); } catch {} }
 function persist() {
   if (demo || !state.step) return;
   const cur = store.current(db);
@@ -54,7 +67,7 @@ function diagram() {
     <rect x="335" y="94" width="244" height="100" rx="10" fill="#d5e8dc" stroke="#346851" stroke-width="2"/><text x="457" y="151" text-anchor="middle">모터</text>
     <path d="M370 194v25 M543 194v25" stroke="#346851" stroke-width="20"/>
     <circle cx="197" cy="62" r="21" fill="#174baa"/><text x="197" y="70" text-anchor="middle" style="fill:white;font-weight:800">위</text><path d="M197 83v33 M218 62h63v54" fill="none" stroke="#174baa" stroke-width="4"/>
-    <circle cx="281" cy="216" r="21" fill="#914200"/><text x="281" y="224" text-anchor="middle" style="fill:white;font-weight:800">아래</text><path d="M281 195v-9 M260 216h-63v-30" fill="none" stroke="#914200" stroke-width="4"/>
+    <circle cx="281" cy="216" r="21" fill="#914200"/><text x="281" y="222" text-anchor="middle" style="fill:white;font-weight:800;font-size:15px">아래</text><path d="M281 195v-9 M260 216h-63v-30" fill="none" stroke="#914200" stroke-width="4"/>
     <text x="370" y="83" text-anchor="middle" class="label">앞발</text><text x="543" y="83" text-anchor="middle" class="label">뒷발</text>
     <path d="M197 237v39 M281 239v37 M370 229v47 M543 229v47" stroke="#6c877c" stroke-dasharray="4 4"/>
     <path d="M197 255h84 M281 255h89 M370 255h173" stroke="#123f35" stroke-width="2"/>
@@ -74,7 +87,9 @@ function render(focus = true) {
   if (state.step === 2) content = dimensions();
   if (state.step === 3) content = readings();
   if (state.step === 4) content = results();
-  app.innerHTML = `${demo ? '<div class="demo-banner">연습 모드 · 예시 숫자</div>' : ''}${!storageOK ? '<p class="notice storage-warning">이 브라우저는 저장 불가. 결과를 따로 기록.</p>' : ''}${state.step ? roundLabel() + progress() : ''}${content}${state.step ? `<p class="saved">${demo ? '연습값은 저장 안 함' : storageOK ? '입력값 자동 저장' : '입력값 저장 안 됨'}</p><button class="plain" data-action="home">${demo ? '연습 종료' : '처음 화면'}</button>` : ''}`;
+  // New screens slide in; in-place refreshes (rpm, unit) do not replay the entrance.
+  app.classList.toggle('enter', focus);
+  app.innerHTML = `${demo ? '<div class="demo-banner">연습 모드 · 예시 숫자</div>' : ''}${!storageOK ? '<p class="notice storage-warning">이 브라우저는 저장 불가. 결과를 따로 기록.</p>' : ''}${state.step ? jobBar() + progress() : ''}${content}`;
   if (focus) { const heading = app.querySelector('h1'); heading?.setAttribute('tabindex', '-1'); heading?.focus({ preventScroll: true }); window.scrollTo(0, 0); }
 }
 function errorSlot() { return `<div id="error" role="alert">${message ? `<p class="error">${esc(message)}</p>` : ''}</div>`; }
@@ -82,7 +97,7 @@ function errorSlot() { return `<div id="error" role="alert">${message ? `<p clas
 class InputError extends Error { constructor(text, field) { super(text); this.field = field; } }
 function clearInvalid(scope = app) { scope.querySelectorAll('.invalid').forEach(el => el.classList.remove('invalid')); scope.querySelectorAll('.field-error').forEach(el => el.remove()); }
 function showError(text, fieldId) {
-  message = text; clearInvalid();
+  message = text; clearInvalid(); buzz('fail');
   const region = document.querySelector('#error');
   if (region) region.innerHTML = `<p class="error">${esc(text)}</p>`;
   const target = fieldId && document.getElementById(fieldId);
@@ -94,10 +109,31 @@ function showError(text, fieldId) {
     if (target.tagName === 'INPUT') target.focus({ preventScroll: true });
   } else region?.scrollIntoView({ block: 'center', behavior: 'auto' });
 }
-function roundLabel() {
-  if (demo) return '';
-  const cur = store.current(db);
-  return cur ? `<p class="round-label">${esc(equipmentName(cur.equipment))} · ${cur.number}차 측정</p>` : '';
+// Top of every measuring screen: the way out, what is being measured, and that it is saved.
+function jobBar() {
+  const cur = !demo && store.current(db);
+  const label = demo ? '연습' : cur ? `<span class="nb">${esc(equipmentName(cur.equipment))}</span> · <span class="nb">${cur.number}차 측정</span>` : '';
+  const saving = demo ? '저장 안 함' : storageOK ? '✓ 자동 저장' : '저장 안 됨';
+  return `<div class="job-bar"><button type="button" class="nav-btn" data-action="leave"><span aria-hidden="true">⌂</span> 처음 화면</button><div class="job-info"><span class="job-name">${label}</span><span class="save-state ${storageOK && !demo ? 'ok' : ''}">${saving}</span></div></div>`;
+}
+// In-app confirmation (the browser's own confirm() shows the site address and tiny buttons).
+// Resolves true only for the confirm button; the safe choice has focus.
+function ask({ title, body, stay, go }) {
+  return new Promise(resolve => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ask';
+    dialog.innerHTML = `<form method="dialog"><h2>${esc(title)}</h2><p>${esc(body)}</p><div class="stack"><button class="primary" value="stay" autofocus>${esc(stay)}</button><button class="secondary" value="go">${esc(go)}</button></div></form>`;
+    dialog.addEventListener('click', event => { if (event.target.closest('button')) buzz('tap'); else if (event.target === dialog) { const r = dialog.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close('stay'); } });
+    dialog.addEventListener('close', () => { resolve(dialog.returnValue === 'go'); dialog.remove(); });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
+}
+async function leave() {
+  const ok = await ask(demo
+    ? { title: '연습을 끝낼까요?', body: '연습값은 저장되지 않음.', stay: '계속 연습', go: '연습 끝내기' }
+    : { title: '처음 화면으로 갈까요?', body: '입력한 값은 자동 저장됨. 처음 화면의 「하던 측정 계속」으로 다시 이어서 입력.', stay: '계속 측정', go: '처음 화면으로' });
+  if (ok) { demo=false; state=empty(); message=''; view='home'; render(); }
 }
 function noticeText() {
   if (notice === 'migrated') return '<p class="notice">예전 측정값을 기록으로 옮김. 「지난 기록」에서 확인.</p>';
@@ -114,6 +150,7 @@ function home() {
   <div class="stack"><button class="${resumable ? 'secondary' : 'primary'}" data-action="new">새 측정</button><button class="secondary" data-action="demo">연습 (예시 숫자)</button></div></section>
   ${db.jobs.length ? `<button class="secondary" data-action="records">지난 기록 (${db.jobs.length}건)</button>` : ''}
   <div class="notice"><strong>시험용.</strong> 결과는 기존 계산과 대조 후 사용.</div>
+  ${canVibrate ? `<button class="nav-btn haptics" data-action="haptics" aria-pressed="${haptics}">버튼 진동: ${haptics ? '켬' : '끔'}</button>` : ''}
   <details><summary>게이지 배치</summary><div class="diagram-box">${diagram()}</div><p class="helper">위 게이지 → 고정측 측정<br>아래 게이지 → 모터측 측정<br>이 자세에서 두 게이지 0점</p></details>
   <details><summary>순서</summary><ol class="steps"><li>거리 A·B·C 입력 (mm)</li><li>90°·180°·270° 게이지 값 입력</li><li>앞발·뒷발 라이너 증감량 확인</li></ol><p class="helper">앞발 = 커플링 쪽 발, 뒷발 = 반대쪽 발</p></details>`;
 }
@@ -122,7 +159,7 @@ function records() {
   return `<h1>지난 기록</h1><p class="lead">이 휴대폰에 저장된 측정</p>
   <div class="stack">${jobs.map(job => { const last = job.rounds[job.rounds.length - 1]; const eq = store.equipmentOf(db, job);
     return `<button class="record-row" data-action="open-job" data-job="${esc(job.id)}"><span class="record-name">${esc(equipmentName(eq))}</span><span class="record-meta">${dateText(job.createdAt)} · 측정 ${job.rounds.length}회</span><span class="record-meta">${esc(roundSummary(last) || '값 없음')}</span></button>`; }).join('')}</div>
-  <button class="plain" data-action="home">처음 화면</button>`;
+  <button class="nav-btn" data-action="home"><span aria-hidden="true">⌂</span> 처음 화면</button>`;
 }
 function jobDetail() {
   const job = db.jobs.find(j => j.id === openJob);
@@ -133,7 +170,7 @@ function jobDetail() {
   <div class="card"><div class="field"><label for="equipment-name">설비 이름 <span class="tiny">(선택)</span></label><input id="equipment-name" data-equipment="${esc(eq.id)}" type="text" maxlength="60" autocomplete="off" value="${esc(eq.name)}" placeholder="예: 2호 송풍기"></div></div>
   ${job.rounds.map((r, i) => `<section class="card round"><h2>${i + 1}차 측정 <span class="tiny">${dateText(r.createdAt)}</span></h2>${roundFacts(r)}</section>`).join('')}
   <div class="stack">${last.result ? '<button class="primary" data-action="remeasure-job">이 설비 재측정</button>' : `<button class="primary" data-action="open-round" data-round="${esc(last.id)}">${job.rounds.length}차 측정 이어서 입력</button>`}</div>
-  <button class="plain" data-action="records">지난 기록</button>`;
+  <button class="nav-btn" data-action="records"><span aria-hidden="true">←</span> 지난 기록</button>`;
 }
 function roundFacts(r) {
   if (!r.result) return `<p class="helper">${r.input.step > 0 ? '입력 중. 결과 전.' : '값 없음.'}</p>`;
@@ -148,7 +185,7 @@ function setup() {
   <ul class="setup-points"><li>위 게이지 → 고정측, 아래 게이지 → 모터측</li><li>이 자세에서 두 게이지 0점</li><li>게이지 침이 눌리면 ＋</li></ul>
   <p class="helper">이렇게 달았으면 아래 버튼. 다르게 달면 결과가 틀림.</p></div>
   <div class="card"><h2>게이지 값 입력 단위</h2><div class="unit-options"><button type="button" data-unit="mm" aria-pressed="${state.unit === 'mm'}">mm<br><span class="tiny">예: 0.12</span></button><button type="button" data-unit="div" aria-pressed="${state.unit === 'div'}">칸<br><span class="tiny">예: 12칸</span></button></div><p class="helper">${state.unit === 'div' ? '0.01 mm 눈금 게이지만 해당. 12칸 = 0.12 mm' : '눈금 칸 수 아님. mm 값 입력'}</p></div>
-  <details><summary>지지대 처짐 보정 <span class="tiny">(보통 안 함)</span></summary>
+  <details><summary>지지대 처짐 보정 <span class="tiny">(선택)</span></summary>
   <label for="sagMode" class="field-label">보정 방법</label><select id="sagMode"><option value="unknown" ${state.sagMode === 'unknown' ? 'selected' : ''}>안 함</option><option value="measured" ${state.sagMode === 'measured' ? 'selected' : ''}>처짐값 직접 입력</option><option value="compensated" ${state.sagMode === 'compensated' ? 'selected' : ''}>게이지 값에 이미 반영</option></select>
   <div id="sag-fields" ${state.sagMode !== 'measured' ? 'hidden' : ''}><p class="helper">지지대를 곧은 파이프에 걸고 같은 자세에서 0점 → 반 바퀴 회전 후 읽은 값. 부호 포함 mm.</p><div class="field"><label for="sagUpper">처음 위 게이지 처짐값 (mm)</label><input id="sagUpper" type="text" inputmode="text" maxlength="12" value="${esc(state.sagUpper)}" placeholder="예: -0.02"></div><div class="field"><label for="sagLower">처음 아래 게이지 처짐값 (mm)</label><input id="sagLower" type="text" inputmode="text" maxlength="12" value="${esc(state.sagLower)}" placeholder="예: +0.02"></div></div></details>
   <p class="check-note">높이(상하) 라이너와 좌우 이동 계산. 좌우는 모터 뒤에서 고정측을 바라본 기준.</p>${errorSlot()}${navigation('이 배치 맞음 · 다음')}</form>`;
@@ -230,6 +267,7 @@ function highlightDim(letter) {
 }
 app.addEventListener('click', event => {
   const button=event.target.closest('button'); if (!button) return;
+  buzz('tap');
   notice='';
   if (button.dataset.sign) {
     const dial=button.dataset.dial; state.signs[dial][state.angle]=Number(button.dataset.sign); persist();
@@ -257,13 +295,15 @@ app.addEventListener('click', event => {
   switch(button.dataset.action){
     case 'new': startJob(); break;
     case 'resume': { const cur=store.current(db); if(!cur)break; demo=false; state=structuredClone(cur.round.input); message=''; render(); break; }
+    case 'leave': leave(); break;
     case 'home': demo=false; state=empty(); message=''; view='home'; render(); break;
     case 'records': view='records'; render(); break;
+    case 'haptics': haptics=!haptics; try{localStorage.setItem(HAPTIC_KEY, haptics?'on':'off');}catch{} if(haptics)buzz('tap'); { const y=window.scrollY; render(false); window.scrollTo(0,y); } break;
     case 'open-job': openJob=button.dataset.job; view='job'; render(); break;
     case 'open-round': { const job=db.jobs.find(j=>j.id===openJob); const round=job?.rounds.find(r=>r.id===button.dataset.round); if(!round)break; db.current={jobId:job.id,roundId:round.id}; demo=false; state=structuredClone(round.input); if(!state.step)state.step=1; message=''; persist(); render(); break; }
     case 'remeasure-job': { const job=db.jobs.find(j=>j.id===openJob); if(job)startRound(job.id, job.rounds.at(-1).input); break; }
     case 'demo': demo=true; state=empty(); state.step=1; state.setup=true; state.positive=true; state.dims={a:'200',b:'150',c:'300'}; state.readings={upper:['0.06','0.20','0.14'],lower:['0.10','0.40','0.30']}; state.side90='right'; state.rpm='1000-2000'; render(); break;
-    case 'back': if(state.step===3&&state.angle>0){state.angle--;persist();message='';render();}else changeStep(state.step-1); break;
+    case 'back': if(state.step===3&&state.angle>0){state.angle--;persist();message='';render();}else if(state.step===1)leave();else changeStep(state.step-1); break;
     case 'edit-readings': state.angle=0; changeStep(3); break;
     case 'edit-distance': changeStep(2); break;
     case 'edit-setup': changeStep(1); break;
@@ -309,7 +349,7 @@ app.addEventListener('submit',event=>{
       for(const dial of ['upper','lower']){
         try{parseDecimal(state.readings[dial][state.angle]);}catch{throw new InputError(`${DIALS[dial].tag} 게이지 값 입력 필요. 0이면 0.`,`read-${dial}`);}
       }
-      if(state.angle<2){state.angle++;message='';persist();render();}else{const r=calculate(inputModel());const cur=!demo&&store.current(db);if(cur)cur.round.result=store.snapshot(r);changeStep(4);}
+      if(state.angle<2){state.angle++;message='';persist();render();}else{const r=calculate(inputModel());const cur=!demo&&store.current(db);if(cur)cur.round.result=store.snapshot(r);changeStep(4);if(r.consistent)buzz('done');else buzz('fail');}
     }
   }catch(error){showError(error.message,error.field);}
 });
