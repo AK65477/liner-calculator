@@ -129,3 +129,6 @@ details{background:var(--plate);border:2px solid var(--line);padding:16px 18px;b
 /* 화면 제목은 화면 전환 때 읽기 위치용으로만 초점을 받음: 테두리 표시 안 함 */
 h1:focus{outline:none}
 .name-card .field{margin:0}.name-card input{font-family:inherit;font-size:1.2rem}
+.basis{margin:4px 0 8px;padding-left:20px;font-size:.85rem;color:var(--muted)}.basis li{margin:2px 0}
+.applied .secondary{margin:4px 0 6px}.applied-foot{border-top:1px solid var(--line);margin-top:18px;padding-top:14px}.applied-foot h3{font-size:1.05rem;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;margin:0 0 4px}.applied-diff{min-height:1.4em;margin:8px 0 0;font-weight:700}
+.applied-facts{border-top:2px dashed var(--line);padding-top:6px}

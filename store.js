@@ -8,6 +8,10 @@ export const CALC_VERSION = 'alignment-0.2';
 let seq = 0;
 const newId = () => `${Date.now().toString(36)}${(seq++).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 const isText = (x, max = 64) => typeof x === 'string' && x.length <= max;
+// What was actually done after a round: per foot, liner added (+1) or removed (-1) and the typed mm.
+const validFoot = f => f && (f.sign === 1 || f.sign === -1) && isText(f.value, 12);
+const validApplied = a => a === undefined || (a && validFoot(a.front) && validFoot(a.rear));
+export function emptyApplied(front = 1, rear = 1) { return { front: { sign: front, value: '' }, rear: { sign: rear, value: '' } }; }
 
 export function emptyDb() { return { version: 2, equipment: [], jobs: [], current: null }; }
 
@@ -18,7 +22,7 @@ function validDb(db, validInput) {
   return db.jobs.every(j => j && isText(j.id) && ids.has(j.equipmentId) && j.module === 'alignment' && isText(j.createdAt)
     && Array.isArray(j.rounds) && j.rounds.length > 0
     && j.rounds.every(r => r && isText(r.id) && isText(r.createdAt) && isText(r.calcVersion) && validInput(r.input)
-      && (r.result === null || typeof r.result === 'object')));
+      && (r.result === null || typeof r.result === 'object') && validApplied(r.applied)));
 }
 
 // Returns { db, ok, notice }. ok=false: storage unusable, nothing will be saved.

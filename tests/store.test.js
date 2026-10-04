@@ -30,6 +30,15 @@ test('re-measurement adds a round and keeps the earlier one with its result', ()
   assert.equal(store.current(back).number, 2);
   assert.equal(back.equipment[0].no, 1); store.newJob(back, input()); assert.equal(back.equipment[1].no, 2);
 });
+test('applied liner changes are kept with the round; malformed ones are rejected', () => {
+  const s = memory(); const { db } = store.load(s, valid);
+  const round = store.newJob(db, input());
+  round.applied = store.emptyApplied(-1, -1); round.applied.front.value = '0.25';
+  store.save(s, db);
+  assert.equal(store.load(s, valid).db.jobs[0].rounds[0].applied.front.value, '0.25');
+  round.applied.rear.sign = 2; store.save(s, db);
+  assert.equal(store.load(s, valid).notice, 'unreadable');
+});
 test('unreadable records are set aside, not overwritten', () => {
   const s = memory({ [store.KEY]: '{"version":2,"jobs":"broken"}' });
   const r = store.load(s, valid, new Date(1000));

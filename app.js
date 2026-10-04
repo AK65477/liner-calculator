@@ -1,5 +1,5 @@
-import { calculate, parseDecimal, correction, sideMove, assess, TOLERANCES } from './calc.js?v=9';
-import * as store from './store.js?v=9';
+import { calculate, parseDecimal, correction, sideMove, assess, TOLERANCES } from './calc.js?v=10';
+import * as store from './store.js?v=10';
 
 const app = document.querySelector('#app');
 const empty = () => ({ step: 0, angle: 0, unit: 'mm', dims: { a: '', b: '', c: '' }, readings: { upper: ['', '', ''], lower: ['', '', ''] }, signs: { upper: [1, 1, 1], lower: [1, 1, 1] }, setup: false, positive: false, sagMode: 'unknown', sagUpper: '', sagLower: '', side90: '', rpm: '' });
@@ -24,6 +24,7 @@ let view = 'home';
 let openJob = '';
 let state = empty();
 let demo = false;
+let demoApplied = null;
 let message = '';
 const ANGLES = [90, 180, 270];
 const TURNS = ['¼바퀴', '반 바퀴', '¾바퀴'];
@@ -228,13 +229,21 @@ function jobDetail() {
   <div class="stack">${last.result ? '<button class="primary" data-action="remeasure-job">이 설비 재측정</button>' : `<button class="primary" data-action="open-round" data-round="${esc(last.id)}">${job.rounds.length}차 측정 이어서 입력</button>`}</div>
   <button class="nav-btn" data-action="records"><span aria-hidden="true">←</span> 지난 기록</button>`;
 }
+function appliedFacts(r) {
+  const rows = [['front', '앞발'], ['rear', '뒷발']].map(([key, title]) => {
+    const f = r.applied?.[key]; let v; try { v = parseDecimal(f?.value); } catch { return ''; }
+    const diff = appliedDiff(f, r.result[key]);
+    return `<div><span>${title} 실제</span><span>${v.toFixed(3)} mm ${f.sign < 0 ? '뺌' : '넣음'}${diff && diff !== '권장과 같음' ? `<br><span class="tiny">${diff}</span>` : ''}</span></div>`;
+  }).join('');
+  return rows ? `<div class="facts applied-facts">${rows}</div>` : '<p class="tiny">실제 넣고 뺀 양 기록 없음.</p>';
+}
 function roundFacts(r) {
   if (!r.result) return `<p class="helper">${r.input.step > 0 ? '입력 중. 결과 전.' : '값 없음.'}</p>`;
   if (!r.result.consistent) return '<p class="helper">게이지 값 불일치로 결과 없음.</p>';
   const liner = v => { const x = correction(v); return `${x.amount} mm ${x.kind === 'remove' ? '빼기' : x.amount === '0.000' ? '그대로' : '넣기'}`; };
   const side = v => { const x = sideMove(v); return `${x.amount} mm ${x.action}`; };
   const h = r.result.horizontal;
-  return `<div class="facts"><div><span>앞발 라이너</span><span>${liner(r.result.front)}</span></div><div><span>뒷발 라이너</span><span>${liner(r.result.rear)}</span></div>${h ? `<div><span>앞발 좌우</span><span>${side(h.front)}</span></div><div><span>뒷발 좌우</span><span>${side(h.rear)}</span></div>` : ''}<div><span>거리 A / B / C</span><span>${esc(r.input.dims.a)} / ${esc(r.input.dims.b)} / ${esc(r.input.dims.c)} mm</span></div></div><p class="tiny">계산 권장량. 실제 넣고 뺀 양은 아직 기록 안 함.</p>`;
+  return `<div class="facts"><div><span>앞발 라이너</span><span>${liner(r.result.front)}</span></div><div><span>뒷발 라이너</span><span>${liner(r.result.rear)}</span></div>${h ? `<div><span>앞발 좌우</span><span>${side(h.front)}</span></div><div><span>뒷발 좌우</span><span>${side(h.rear)}</span></div>` : ''}<div><span>거리 A / B / C</span><span>${esc(r.input.dims.a)} / ${esc(r.input.dims.b)} / ${esc(r.input.dims.c)} mm</span></div></div>${appliedFacts(r)}`;
 }
 // Optional name at the start of a job; empty keeps the running number (설비 N).
 function nameField() {
@@ -288,7 +297,7 @@ function results() {
     : `<div class="notice">90° 때 처음 위 게이지 위치(왼쪽/오른쪽) 미선택 → 좌우 계산 안 함.</div><button class="secondary" data-action="edit-readings">90° 화면에서 위치 선택</button>`}
   <div class="notice"><strong>${demo ? '연습용 예시 결과.' : '시험용 결과. 기존 계산과 대조 후 사용.'}</strong>${state.sagMode === 'unknown' ? ' 처짐 보정 안 함.' : ''}</div>
   <p class="helper">앞발 2개 동일, 뒷발 2개 동일. 빼는 양이 현재 라이너보다 크면 그대로 적용 불가. 높이 먼저, 좌우 나중. 조정 후 재측정.</p>
-  ${judgement(result)}${facts}
+  ${judgement(result)}${appliedCard(result)}${facts}
   <details><summary>계산 방법</summary><p class="helper">처음 위 게이지 값 → 고정측 자리의 높이 차, 처음 아래 게이지 값 → 모터측 자리의 높이 차. 두 점을 직선으로 이어 앞발·뒷발 위치까지 연장, 그 높이 차를 없애는 양이 조정량.</p><a href="./method.html">공식과 검산 자료</a></details>
   <div class="stack"><button class="primary" data-action="remeasure">${remeasureText()}</button></div>`;
 }
@@ -299,11 +308,47 @@ function judgement(result) {
   const mark = ok => `<span class="verdict ${ok ? 'ok' : 'over'}">${ok ? '허용 이내' : '초과'}</span>`;
   const row = (name, value, limit, ok, unit) => `<div><span>${name}</span><span>${value.toFixed(3)} / ${limit.toFixed(2)} ${unit} ${mark(ok)}</span></div>`;
   const plane = (title, p) => row(`${title} 평행`, p.offset, a.row.offset, p.offsetOK, 'mm') + row(`${title} 각도`, p.angle, a.row.angle, p.angleOK, 'mm/100mm');
-  const summary = !a.ok ? '조정 필요' : a.complete ? '허용 기준 이내' : '높이만 기준 이내 (좌우 미판정)';
-  return `<section class="card judgement"><h2>③ 정렬 상태 판정</h2>${picker}
+  const summary = !a.ok ? '조정 필요' : a.complete ? '일반 기준 이내' : '높이만 일반 기준 이내 (좌우 미판정)';
+  // A reference check, not acceptance: list the assumptions it rests on.
+  const basis = ['일반 기준표 (제조사 기준 아님)', state.sagMode === 'unknown' ? '처짐 보정 안 함' : '', '열팽창 목표 0', '커플링 중심 = 두 게이지 침 가운데'].filter(Boolean);
+  return `<section class="card judgement"><h2>③ 정렬 상태 판정 <span class="tiny">(참고)</span></h2>${picker}
   <p class="verdict-line ${a.ok ? 'ok' : 'over'}">${summary}</p>
   <div class="facts"><div><span></span><span class="tiny">현재값 / 허용값</span></div>${plane('상하', a.vertical)}${a.horizontal ? plane('좌우', a.horizontal) : ''}</div>
-  <p class="helper">평행 = 두 게이지 침 가운데 지점(커플링 중심으로 봄)의 축 어긋남. 각도 = 100 mm당 기울기 차. 제조사 기준이 없을 때 쓰는 일반 표(Fixturlaser). 설비·제조사 기준이 우선. 열팽창 목표 0 가정.</p></section>`;
+  <ul class="basis">${basis.map(b => `<li>${b}</li>`).join('')}</ul>
+  <p class="helper">최종 합격은 설비·제조사 기준으로 확인. 평행 = 축 어긋남, 각도 = 100 mm당 기울기 차. 일반 표 출처: Fixturlaser.</p></section>`;
+}
+// What was actually put in or taken out, beside the recommendation, so the next round can be compared.
+function appliedOf(result) {
+  const sign = v => v < 0 ? -1 : 1;
+  if (demo) return demoApplied ??= store.emptyApplied(sign(result.front), sign(result.rear));
+  const cur = store.current(db);
+  if (!cur) return null;
+  return cur.round.applied ??= store.emptyApplied(sign(result.front), sign(result.rear));
+}
+function saveApplied() { if (!demo && !store.save(storage, db)) storageOK = false; }
+function appliedDiff(foot, recommended) {
+  let value; try { value = parseDecimal(foot?.value); } catch { return ''; }
+  const diff = Math.round((foot.sign * value - recommended) * 1000) / 1000;
+  return diff === 0 ? '권장과 같음' : `권장보다 ${Math.abs(diff).toFixed(3)} mm ${diff > 0 ? '높게' : '낮게'}`;
+}
+const linerVerb = x => x.kind === 'remove' ? '빼기' : x.amount === '0.000' ? '그대로' : '넣기';
+function appliedCard(result) {
+  const applied = appliedOf(result);
+  if (!applied) return '';
+  const feet = [['front', '앞발', result.front], ['rear', '뒷발', result.rear]];
+  return `<section class="card applied" aria-labelledby="applied-title"><h2 id="applied-title">④ 실제 넣고 뺀 라이너 <span class="tiny">(선택)</span></h2>
+  <p class="helper">조정 후 실제로 한 양. 다음 회차와 비교할 때 사용.</p>
+  <button type="button" class="secondary" data-action="applied-same">권장량 그대로 했음</button>
+  ${feet.map(([key, title, rec]) => { const f = applied[key]; const x = correction(rec); return `<div class="applied-foot"><h3>${title} <span class="foot-label">권장 ${x.amount} ${linerVerb(x)}</span></h3>
+  <div class="signs" role="group" aria-label="${title} 실제 조정"><button type="button" class="sign" data-applied="${key}" data-applied-sign="1" aria-pressed="${f.sign === 1}">넣음</button><button type="button" class="sign" data-applied="${key}" data-applied-sign="-1" aria-pressed="${f.sign === -1}">뺌</button></div>
+  <div class="unit-input"><input id="applied-${key}" data-applied-input="${key}" type="text" inputmode="decimal" maxlength="12" autocomplete="off" aria-label="${title} 실제 두께" value="${esc(f.value)}" placeholder="실제 두께"><span>mm</span></div>
+  <p class="helper applied-diff" id="diff-${key}">${appliedDiff(f, rec)}</p></div>`; }).join('')}
+  ${demo ? '<p class="tiny">연습값은 저장 안 함.</p>' : ''}</section>`;
+}
+function refreshDiff(key) {
+  let result; try { result = calculate(inputModel()); } catch { return; }
+  const el = document.getElementById(`diff-${key}`);
+  if (el) el.textContent = appliedDiff(appliedOf(result)[key], result[key]);
 }
 function signed(n) { return `${n < 0 ? '−' : '+'}${Math.abs(n).toFixed(3)}`; }
 function remeasureText() { const cur = !demo && store.current(db); return cur ? `같은 설비 재측정 (${cur.job.rounds.length + 1}차)` : '같은 거리로 재측정'; }
@@ -337,6 +382,12 @@ app.addEventListener('click', event => {
     document.querySelector(`#sign-${dial}`).textContent=Number(button.dataset.sign)===1?'+':'−';
     document.querySelector(`#read-${dial}`)?.focus(); return;
   }
+  if (button.dataset.appliedSign) {
+    let result; try { result = calculate(inputModel()); } catch { return; }
+    const key = button.dataset.applied; appliedOf(result)[key].sign = Number(button.dataset.appliedSign); saveApplied();
+    button.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));
+    refreshDiff(key); return;
+  }
   if (button.dataset.side) {
     state.side90=button.dataset.side; persist();
     button.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));
@@ -360,11 +411,12 @@ app.addEventListener('click', event => {
     case 'leave': leave(); break;
     case 'home': goHome(); break;
     case 'records': if(!stepBack('records')){view='records'; render();} break;
+    case 'applied-same': { let r; try { r=calculate(inputModel()); } catch { break; } const a=appliedOf(r); for(const key of ['front','rear']){ a[key].sign=r[key]<0?-1:1; a[key].value=correction(r[key]).amount; } saveApplied(); const y=window.scrollY; render(false); window.scrollTo(0,y); break; }
     case 'haptics': haptics=!haptics; try{localStorage.setItem(HAPTIC_KEY, haptics?'on':'off');}catch{} if(haptics)buzz('tap'); { const y=window.scrollY; render(false); window.scrollTo(0,y); } break;
     case 'open-job': openJob=button.dataset.job; view='job'; render(); break;
     case 'open-round': { const job=db.jobs.find(j=>j.id===openJob); const round=job?.rounds.find(r=>r.id===button.dataset.round); if(!round)break; db.current={jobId:job.id,roundId:round.id}; demo=false; state=structuredClone(round.input); if(!state.step)state.step=1; message=''; persist(); render(); break; }
     case 'remeasure-job': { const job=db.jobs.find(j=>j.id===openJob); if(job)startRound(job.id, job.rounds.at(-1).input); break; }
-    case 'demo': demo=true; state=empty(); state.step=1; state.setup=true; state.positive=true; state.dims={a:'200',b:'150',c:'300'}; state.readings={upper:['0.06','0.20','0.14'],lower:['0.10','0.40','0.30']}; state.side90='right'; state.rpm='1000-2000'; render(); break;
+    case 'demo': demo=true; demoApplied=null; state=empty(); state.step=1; state.setup=true; state.positive=true; state.dims={a:'200',b:'150',c:'300'}; state.readings={upper:['0.06','0.20','0.14'],lower:['0.10','0.40','0.30']}; state.side90='right'; state.rpm='1000-2000'; render(); break;
     case 'back': {
       const prev = state.step===3&&state.angle>0 ? `f:3:${state.angle-1}` : state.step>1 ? `f:${state.step-1}:${state.step-1===3?2:0}` : '';
       if(state.step===1){leave();break;}
@@ -379,6 +431,7 @@ app.addEventListener('click', event => {
 });
 app.addEventListener('input',event=>{
   const el=event.target;
+  if(el.dataset.appliedInput){ let r; try { r=calculate(inputModel()); } catch { return; } appliedOf(r)[el.dataset.appliedInput].value=el.value; saveApplied(); refreshDiff(el.dataset.appliedInput); return; }
   if(el.dataset.equipment){const eq=db.equipment.find(e=>e.id===el.dataset.equipment);if(eq){eq.name=el.value.slice(0,60);if(!store.save(storage,db))storageOK=false;}return;}
   if(el.id.startsWith('dim-'))state.dims[el.name]=el.value;
   if(el.id.startsWith('read-'))state.readings[el.id.slice(5)][state.angle]=el.value;
