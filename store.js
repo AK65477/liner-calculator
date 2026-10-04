@@ -13,7 +13,7 @@ export function emptyDb() { return { version: 2, equipment: [], jobs: [], curren
 
 function validDb(db, validInput) {
   if (!db || db.version !== 2 || !Array.isArray(db.equipment) || !Array.isArray(db.jobs)) return false;
-  if (!db.equipment.every(e => e && isText(e.id) && isText(e.name, 60) && isText(e.createdAt))) return false;
+  if (!db.equipment.every(e => e && isText(e.id) && isText(e.name, 60) && isText(e.createdAt) && (e.no === undefined || (Number.isInteger(e.no) && e.no > 0)))) return false;
   const ids = new Set(db.equipment.map(e => e.id));
   return db.jobs.every(j => j && isText(j.id) && ids.has(j.equipmentId) && j.module === 'alignment' && isText(j.createdAt)
     && Array.isArray(j.rounds) && j.rounds.length > 0
@@ -31,6 +31,7 @@ export function load(storage, validInput, now = new Date()) {
       const db = JSON.parse(raw);
       if (validDb(db, validInput)) {
         if (!findRound(db, db.current?.jobId, db.current?.roundId)) db.current = null;
+        db.equipment.forEach((e, i) => { e.no ??= i + 1; });
         return { db, ok: true };
       }
     } catch {}
@@ -58,7 +59,9 @@ function makeRound(input, now) {
 }
 
 export function newJob(db, input, now = new Date()) {
-  const equipment = { id: newId(), name: '', createdAt: now.toISOString() };
+  // Unnamed equipment is shown as 「설비 N」 by this running number.
+  const no = db.equipment.reduce((max, e, i) => Math.max(max, e.no ?? i + 1), 0) + 1;
+  const equipment = { id: newId(), name: '', no, createdAt: now.toISOString() };
   const round = makeRound(input, now);
   const job = { id: newId(), equipmentId: equipment.id, module: 'alignment', createdAt: now.toISOString(), rounds: [round] };
   db.equipment.push(equipment); db.jobs.push(job);

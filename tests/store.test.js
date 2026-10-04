@@ -28,6 +28,7 @@ test('re-measurement adds a round and keeps the earlier one with its result', ()
   const back = store.load(s, valid).db;
   assert.equal(back.jobs[0].rounds.length, 2); assert.equal(back.jobs[0].rounds[0].result.front, -.275);
   assert.equal(store.current(back).number, 2);
+  assert.equal(back.equipment[0].no, 1); store.newJob(back, input()); assert.equal(back.equipment[1].no, 2);
 });
 test('unreadable records are set aside, not overwritten', () => {
   const s = memory({ [store.KEY]: '{"version":2,"jobs":"broken"}' });

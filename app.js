@@ -1,5 +1,5 @@
-import { calculate, parseDecimal, correction, sideMove, assess, TOLERANCES } from './calc.js?v=7';
-import * as store from './store.js?v=7';
+import { calculate, parseDecimal, correction, sideMove, assess, TOLERANCES } from './calc.js?v=9';
+import * as store from './store.js?v=9';
 
 const app = document.querySelector('#app');
 const empty = () => ({ step: 0, angle: 0, unit: 'mm', dims: { a: '', b: '', c: '' }, readings: { upper: ['', '', ''], lower: ['', '', ''] }, signs: { upper: [1, 1, 1], lower: [1, 1, 1] }, setup: false, positive: false, sagMode: 'unknown', sagUpper: '', sagLower: '', side90: '', rpm: '' });
@@ -51,8 +51,12 @@ function persist() {
   if (state.step < 4) cur.round.result = null;
   if (!store.save(storage, db)) storageOK = false;
 }
-const dateText = iso => { const d = new Date(iso); return `${d.getMonth()+1}월 ${d.getDate()}일 ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
-const equipmentName = eq => eq?.name || '이름 없는 설비';
+const dateText = iso => {
+  const d = new Date(iso), days = Math.round((new Date().setHours(0,0,0,0) - new Date(iso).setHours(0,0,0,0)) / 864e5);
+  const day = days === 0 ? '오늘' : days === 1 ? '어제' : `${d.getMonth()+1}월 ${d.getDate()}일`;
+  return `${day} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+};
+const equipmentName = eq => eq?.name || `설비 ${eq?.no ?? ''}`.trim();
 function roundSummary(r) {
   if (!r.result) return r.input.step > 0 ? '입력 중' : '';
   if (!r.result.consistent) return '게이지 값 불일치';
@@ -88,6 +92,7 @@ function render(focus = true) {
   if (state.step === 3) content = readings();
   if (state.step === 4) content = results();
   // New screens slide in; in-place refreshes (rpm, unit) do not replay the entrance.
+  if (focus) track();
   app.classList.toggle('enter', focus);
   app.innerHTML = `${demo ? '<div class="demo-banner">연습 모드 · 예시 숫자</div>' : ''}${!storageOK ? '<p class="notice storage-warning">이 브라우저는 저장 불가. 결과를 따로 기록.</p>' : ''}${state.step ? jobBar() + progress() : ''}${content}`;
   if (focus) { const heading = app.querySelector('h1'); heading?.setAttribute('tabindex', '-1'); heading?.focus({ preventScroll: true }); window.scrollTo(0, 0); }
@@ -117,23 +122,74 @@ function jobBar() {
   return `<div class="job-bar"><button type="button" class="nav-btn" data-action="leave"><span aria-hidden="true">⌂</span> 처음 화면</button><div class="job-info"><span class="job-name">${label}</span><span class="save-state ${storageOK && !demo ? 'ok' : ''}">${saving}</span></div></div>`;
 }
 // In-app confirmation (the browser's own confirm() shows the site address and tiny buttons).
-// Resolves true only for the confirm button; the safe choice has focus.
+// Resolves 'go', 'stay' (tapped) or '' (closed by back or outside tap); the safe choice has focus.
 function ask({ title, body, stay, go }) {
   return new Promise(resolve => {
     const dialog = document.createElement('dialog');
     dialog.className = 'ask';
     dialog.innerHTML = `<form method="dialog"><h2>${esc(title)}</h2><p>${esc(body)}</p><div class="stack"><button class="primary" value="stay" autofocus>${esc(stay)}</button><button class="secondary" value="go">${esc(go)}</button></div></form>`;
     dialog.addEventListener('click', event => { if (event.target.closest('button')) buzz('tap'); else if (event.target === dialog) { const r = dialog.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close('stay'); } });
-    dialog.addEventListener('close', () => { resolve(dialog.returnValue === 'go'); dialog.remove(); });
+    dialog.addEventListener('close', () => { resolve(dialog.returnValue); dialog.remove(); });
     document.body.append(dialog);
     dialog.showModal();
   });
 }
-async function leave() {
-  const ok = await ask(demo
+// Phone back button. Every screen change made by a tap adds one browser history entry,
+// so the system back gesture steps back through the app instead of closing the browser.
+// Chrome skips entries a page adds without a tap, so nothing is re-added after a back press.
+// Instead, entering a measurement adds a 'guard' entry under it (during that tap): backing
+// onto the guard asks before leaving. On the first screen, back exits as usual.
+const screenKey = () => state.step ? `f:${state.step}:${state.step === 3 ? state.angle : 0}` : view === 'job' ? `job:${openJob}` : view;
+let stack = ['home'], at = 0, quiet = 0, popping = false;
+try { history.scrollRestoration = 'manual'; history.replaceState({ s: 'home', i: 0 }, ''); } catch {}
+function push(key) {
+  stack = stack.slice(0, at + 1).concat(key); at++;
+  try { history.pushState({ s: key, i: at }, ''); } catch {}
+}
+function track() {
+  const key = screenKey();
+  if (popping || key === stack[at]) return;
+  if (key.startsWith('f:') && !stack[at].startsWith('f:') && stack[at] !== 'guard') push('guard');
+  push(key);
+}
+// Steps back through history when the wanted screen is the previous entry; false otherwise.
+function stepBack(key) { if (at > 0 && stack[at - 1] === key) { history.back(); return true; } return false; }
+function goHome() {
+  demo=false; state=empty(); message=''; view='home';
+  popping = true; render(); popping = false;
+  if (at > 0) { quiet++; const n = at; stack = ['home']; at = 0; history.go(-n); }
+}
+function showScreen(key) {
+  popping = true;
+  if (key.startsWith('f:')) {
+    const [, step, angle] = key.split(':').map(Number);
+    if (!state.step) { const cur = store.current(db); if (!cur) { popping = false; return goHome(); } demo = false; state = structuredClone(cur.round.input); }
+    state.step = step; state.angle = angle; message = ''; persist();
+  } else {
+    if (key.startsWith('job:')) { openJob = key.slice(4); view = 'job'; } else view = key === 'records' ? 'records' : 'home';
+  }
+  render(); popping = false;
+}
+window.addEventListener('popstate', event => {
+  if (quiet) { quiet--; return; }
+  const target = event.state?.s || 'home';
+  at = Number.isInteger(event.state?.i) ? event.state.i : 0;
+  if (stack[at] !== target) stack = stack.slice(0, at).concat(target);
+  // The back gesture while a confirmation is open just closes it.
+  const open = document.querySelector('dialog[open]');
+  if (open) { open.close(''); return; }
+  if (target === 'guard' && !state.step) { history.back(); return; }
+  if (state.step && !target.startsWith('f:')) return leave(true);
+  showScreen(target);
+});
+async function leave(fromBack = false) {
+  const choice = await ask(demo
     ? { title: '연습을 끝낼까요?', body: '연습값은 저장되지 않음.', stay: '계속 연습', go: '연습 끝내기' }
     : { title: '처음 화면으로 갈까요?', body: '입력한 값은 자동 저장됨. 처음 화면의 「하던 측정 계속」으로 다시 이어서 입력.', stay: '계속 측정', go: '처음 화면으로' });
-  if (ok) { demo=false; state=empty(); message=''; view='home'; render(); }
+  if (choice === 'go') goHome();
+  // Back moved the browser off this screen. A tap on 'stay' allows putting the entry back;
+  // a second back press (closing the box) does not, so the browser stays on the guard.
+  else if (fromBack && choice === 'stay') push(screenKey());
 }
 function noticeText() {
   if (notice === 'migrated') return '<p class="notice">예전 측정값을 기록으로 옮김. 「지난 기록」에서 확인.</p>';
@@ -180,8 +236,14 @@ function roundFacts(r) {
   const h = r.result.horizontal;
   return `<div class="facts"><div><span>앞발 라이너</span><span>${liner(r.result.front)}</span></div><div><span>뒷발 라이너</span><span>${liner(r.result.rear)}</span></div>${h ? `<div><span>앞발 좌우</span><span>${side(h.front)}</span></div><div><span>뒷발 좌우</span><span>${side(h.rear)}</span></div>` : ''}<div><span>거리 A / B / C</span><span>${esc(r.input.dims.a)} / ${esc(r.input.dims.b)} / ${esc(r.input.dims.c)} mm</span></div></div><p class="tiny">계산 권장량. 실제 넣고 뺀 양은 아직 기록 안 함.</p>`;
 }
+// Optional name at the start of a job; empty keeps the running number (설비 N).
+function nameField() {
+  const cur = !demo && store.current(db);
+  if (!cur) return '';
+  return `<div class="card name-card"><div class="field"><label for="equipment-name">설비 이름 <span class="tiny">(선택)</span></label><input id="equipment-name" data-equipment="${esc(cur.equipment.id)}" type="text" maxlength="60" autocomplete="off" enterkeyhint="next" value="${esc(cur.equipment.name)}" placeholder="예: 2호 송풍기"><p class="helper">비워 두면 「${esc(`설비 ${cur.equipment.no ?? ''}`.trim())}」로 기록.</p></div></div>`;
+}
 function setup() {
-  return `<h1>게이지 배치 확인</h1><p class="lead">옆에서 본 그림. 모터가 오른쪽.</p><form id="setup-form"><div class="card"><div class="diagram-box">${diagram()}</div>
+  return `<h1>게이지 배치 확인</h1><p class="lead">옆에서 본 그림. 모터가 오른쪽.</p><form id="setup-form">${nameField()}<div class="card"><div class="diagram-box">${diagram()}</div>
   <ul class="setup-points"><li>위 게이지 → 고정측, 아래 게이지 → 모터측</li><li>이 자세에서 두 게이지 0점</li><li>게이지 침이 눌리면 ＋</li></ul>
   <p class="helper">이렇게 달았으면 아래 버튼. 다르게 달면 결과가 틀림.</p></div>
   <div class="card"><h2>게이지 값 입력 단위</h2><div class="unit-options"><button type="button" data-unit="mm" aria-pressed="${state.unit === 'mm'}">mm<br><span class="tiny">예: 0.12</span></button><button type="button" data-unit="div" aria-pressed="${state.unit === 'div'}">칸<br><span class="tiny">예: 12칸</span></button></div><p class="helper">${state.unit === 'div' ? '0.01 mm 눈금 게이지만 해당. 12칸 = 0.12 mm' : '눈금 칸 수 아님. mm 값 입력'}</p></div>
@@ -296,14 +358,19 @@ app.addEventListener('click', event => {
     case 'new': startJob(); break;
     case 'resume': { const cur=store.current(db); if(!cur)break; demo=false; state=structuredClone(cur.round.input); message=''; render(); break; }
     case 'leave': leave(); break;
-    case 'home': demo=false; state=empty(); message=''; view='home'; render(); break;
-    case 'records': view='records'; render(); break;
+    case 'home': goHome(); break;
+    case 'records': if(!stepBack('records')){view='records'; render();} break;
     case 'haptics': haptics=!haptics; try{localStorage.setItem(HAPTIC_KEY, haptics?'on':'off');}catch{} if(haptics)buzz('tap'); { const y=window.scrollY; render(false); window.scrollTo(0,y); } break;
     case 'open-job': openJob=button.dataset.job; view='job'; render(); break;
     case 'open-round': { const job=db.jobs.find(j=>j.id===openJob); const round=job?.rounds.find(r=>r.id===button.dataset.round); if(!round)break; db.current={jobId:job.id,roundId:round.id}; demo=false; state=structuredClone(round.input); if(!state.step)state.step=1; message=''; persist(); render(); break; }
     case 'remeasure-job': { const job=db.jobs.find(j=>j.id===openJob); if(job)startRound(job.id, job.rounds.at(-1).input); break; }
     case 'demo': demo=true; state=empty(); state.step=1; state.setup=true; state.positive=true; state.dims={a:'200',b:'150',c:'300'}; state.readings={upper:['0.06','0.20','0.14'],lower:['0.10','0.40','0.30']}; state.side90='right'; state.rpm='1000-2000'; render(); break;
-    case 'back': if(state.step===3&&state.angle>0){state.angle--;persist();message='';render();}else if(state.step===1)leave();else changeStep(state.step-1); break;
+    case 'back': {
+      const prev = state.step===3&&state.angle>0 ? `f:3:${state.angle-1}` : state.step>1 ? `f:${state.step-1}:${state.step-1===3?2:0}` : '';
+      if(state.step===1){leave();break;}
+      if(stepBack(prev))break;
+      if(state.step===3&&state.angle>0){state.angle--;persist();message='';render();}else changeStep(state.step-1); break;
+    }
     case 'edit-readings': state.angle=0; changeStep(3); break;
     case 'edit-distance': changeStep(2); break;
     case 'edit-setup': changeStep(1); break;
