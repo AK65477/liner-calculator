@@ -1,5 +1,5 @@
-import { calculate, parseDecimal, correction, sideMove, assess, TOLERANCES } from './calc.js?v=10';
-import * as store from './store.js?v=10';
+import { calculate, parseDecimal, correction, sideMove, assess, TOLERANCES } from './calc.js?v=13';
+import * as store from './store.js?v=13';
 
 const app = document.querySelector('#app');
 const empty = () => ({ step: 0, angle: 0, unit: 'mm', dims: { a: '', b: '', c: '' }, readings: { upper: ['', '', ''], lower: ['', '', ''] }, signs: { upper: [1, 1, 1], lower: [1, 1, 1] }, setup: false, positive: false, sagMode: 'unknown', sagUpper: '', sagLower: '', side90: '', rpm: '' });
@@ -31,6 +31,19 @@ const TURNS = ['¼바퀴', '반 바퀴', '¾바퀴'];
 const DIALS = { upper: { tag: '처음 위', target: '고정측 측정' }, lower: { tag: '처음 아래', target: '모터측 측정' } };
 const esc = text => String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The live input belongs to the current round; leaving the result screen voids its snapshot.
+// Offline (sw.js). A downloaded update waits; it is applied only from the first screen.
+let updateReady = null, applying = false;
+if ('serviceWorker' in navigator) {
+  const offer = worker => { if (!worker || !navigator.serviceWorker.controller) return; updateReady = worker; if (!state.step && view === 'home') render(false); };
+  navigator.serviceWorker.register('./sw.js').then(reg => {
+    if (reg.waiting) offer(reg.waiting);
+    reg.update().catch(() => {});
+    reg.addEventListener('updatefound', () => { const w = reg.installing; w?.addEventListener('statechange', () => { if (w.state === 'installed') offer(w); }); });
+  }).catch(() => {});
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (applying) location.reload(); });
+}
+// Ask the browser not to clear these records when the phone runs low on space.
+if (db.jobs.length) navigator.storage?.persist?.().catch(() => {});
 // Touch feedback. Press shows on touch-down: Chrome delays :active, and most buttons
 // replace the screen on click before a release animation could be seen.
 let pressed = null;
@@ -43,7 +56,7 @@ const canVibrate = typeof navigator.vibrate === 'function';
 let haptics = true;
 try { haptics = localStorage.getItem(HAPTIC_KEY) !== 'off'; } catch {}
 const BUZZ = { tap: 8, done: [14, 70, 14], fail: 45 };
-function buzz(kind) { if (canVibrate && haptics) try { navigator.vibrate(BUZZ[kind]); } catch {} }
+function buzz(kind) { if (canVibrate && haptics && navigator.userActivation?.hasBeenActive !== false) try { navigator.vibrate(BUZZ[kind]); } catch {} }
 function persist() {
   if (demo || !state.step) return;
   const cur = store.current(db);
@@ -87,7 +100,7 @@ function navigation(nextText = '다음') {
 }
 function render(focus = true) {
   let content = '';
-  if (!state.step) content = view === 'records' ? records() : view === 'job' ? jobDetail() : home();
+  if (!state.step) content = view === 'records' ? records() : view === 'job' ? jobDetail() : view === 'backup' ? backup() : home();
   if (state.step === 1) content = setup();
   if (state.step === 2) content = dimensions();
   if (state.step === 3) content = readings();
@@ -167,7 +180,7 @@ function showScreen(key) {
     if (!state.step) { const cur = store.current(db); if (!cur) { popping = false; return goHome(); } demo = false; state = structuredClone(cur.round.input); }
     state.step = step; state.angle = angle; message = ''; persist();
   } else {
-    if (key.startsWith('job:')) { openJob = key.slice(4); view = 'job'; } else view = key === 'records' ? 'records' : 'home';
+    if (key.startsWith('job:')) { openJob = key.slice(4); view = 'job'; } else view = ['records', 'backup'].includes(key) ? key : 'home';
   }
   render(); popping = false;
 }
@@ -207,7 +220,8 @@ function home() {
   <div class="stack"><button class="${resumable ? 'secondary' : 'primary'}" data-action="new">새 측정</button><button class="secondary" data-action="demo">연습 (예시 숫자)</button></div></section>
   ${db.jobs.length ? `<button class="secondary" data-action="records">지난 기록 (${db.jobs.length}건)</button>` : ''}
   <div class="notice"><strong>시험용.</strong> 결과는 기존 계산과 대조 후 사용.</div>
-  ${canVibrate ? `<button class="nav-btn haptics" data-action="haptics" aria-pressed="${haptics}">버튼 진동: ${haptics ? '켬' : '끔'}</button>` : ''}
+  ${updateReady ? '<section class="card update-card"><h2>새 버전 준비됨</h2><p class="helper">측정 중이 아닐 때 적용. 입력값은 그대로.</p><button class="primary" data-action="apply-update">지금 업데이트</button></section>' : ''}
+  <div class="home-tools"><button class="nav-btn" data-action="backup">기록 백업 · 불러오기</button>${canVibrate ? `<button class="nav-btn haptics" data-action="haptics" aria-pressed="${haptics}">버튼 진동: ${haptics ? '켬' : '끔'}</button>` : ''}</div>
   <details><summary>게이지 배치</summary><div class="diagram-box">${diagram()}</div><p class="helper">위 게이지 → 고정측 측정<br>아래 게이지 → 모터측 측정<br>이 자세에서 두 게이지 0점</p></details>
   <details><summary>순서</summary><ol class="steps"><li>거리 A·B·C 입력 (mm)</li><li>90°·180°·270° 게이지 값 입력</li><li>앞발·뒷발 라이너 증감량 확인</li></ol><p class="helper">앞발 = 커플링 쪽 발, 뒷발 = 반대쪽 발</p></details>`;
 }
@@ -217,6 +231,43 @@ function records() {
   <div class="stack">${jobs.map(job => { const last = job.rounds[job.rounds.length - 1]; const eq = store.equipmentOf(db, job);
     return `<button class="record-row" data-action="open-job" data-job="${esc(job.id)}"><span class="record-name">${esc(equipmentName(eq))}</span><span class="record-meta">${dateText(job.createdAt)} · 측정 ${job.rounds.length}회</span><span class="record-meta">${esc(roundSummary(last) || '값 없음')}</span></button>`; }).join('')}</div>
   <button class="nav-btn" data-action="home"><span aria-hidden="true">⌂</span> 처음 화면</button>`;
+}
+// Records live only in this phone's browser: a file copy survives a new phone or cleared data.
+const BACKUP_KEY = 'field-app-last-backup';
+function lastBackup() { try { return localStorage.getItem(BACKUP_KEY); } catch { return null; } }
+function backupFile() {
+  const d = new Date(), day = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  // .txt keeps the file openable and attachable from any phone app; the content is JSON.
+  return new File([store.backupText(db, d)], `현장정비-기록-${day}.txt`, { type: 'text/plain' });
+}
+function backup() {
+  const rounds = db.jobs.reduce((n, j) => n + j.rounds.length, 0), last = lastBackup();
+  return `<h1>기록 백업</h1><p class="lead">기록은 이 휴대폰 브라우저 안에만 있음. 폰 교체·브라우저 데이터 삭제 전에 파일로 보관.</p>
+  <section class="card"><h2>내보내기</h2><p class="helper">기록 ${db.jobs.length}건 · 측정 ${rounds}회 · 마지막 내보내기: ${last ? dateText(last) : '없음'}</p>
+  <button class="primary" data-action="backup-save">휴대폰에 파일 저장</button></section>
+  <section class="card"><h2>불러오기</h2><p class="helper">내보낸 파일을 고르면 이 폰에 없는 기록만 추가. 지금 기록은 지우지 않음.</p>
+  <button class="secondary" data-action="backup-pick">백업 파일 고르기</button><input id="backup-file" type="file" accept=".txt,.json,text/plain,application/json" hidden></section>
+  <p id="backup-status" class="helper backup-status" role="status"></p>
+  <button class="nav-btn" data-action="home"><span aria-hidden="true">⌂</span> 처음 화면</button>`;
+}
+function backupStatus(text) { const el = document.getElementById('backup-status'); if (el) el.textContent = text; }
+function markBackup() { try { localStorage.setItem(BACKUP_KEY, new Date().toISOString()); } catch {} }
+function saveBackup() {
+  const file = backupFile(), url = URL.createObjectURL(file), a = document.createElement('a');
+  a.href = url; a.download = file.name; document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  markBackup(); render(false); backupStatus(`저장함: ${file.name} (다운로드 폴더)`);
+}
+async function importBackup(file) {
+  let incoming;
+  try { incoming = store.readBackup(await file.text(), validStored); } catch (e) { buzz('fail'); return backupStatus(e.message || '읽을 수 없는 파일.'); }
+  const preview = store.mergeInto(structuredClone(db), incoming);
+  if (!preview.rounds) return backupStatus('새로 추가할 기록 없음. 이미 모두 있음.');
+  const choice = await ask({ title: '기록을 불러올까요?', body: `${preview.jobs ? `새 기록 ${preview.jobs}건, ` : ''}측정 ${preview.rounds}회 추가. 지금 기록은 그대로.`, stay: '취소', go: '불러오기' });
+  if (choice !== 'go') return;
+  store.mergeInto(db, incoming);
+  if (!store.save(storage, db)) storageOK = false;
+  render(false); backupStatus(`불러옴: 측정 ${preview.rounds}회 추가.`); buzz('done');
 }
 function jobDetail() {
   const job = db.jobs.find(j => j.id === openJob);
@@ -411,6 +462,10 @@ app.addEventListener('click', event => {
     case 'leave': leave(); break;
     case 'home': goHome(); break;
     case 'records': if(!stepBack('records')){view='records'; render();} break;
+    case 'backup': view='backup'; render(); break;
+    case 'backup-save': saveBackup(); break;
+    case 'backup-pick': document.getElementById('backup-file')?.click(); break;
+    case 'apply-update': if(updateReady){ applying=true; updateReady.postMessage('apply-update'); } break;
     case 'applied-same': { let r; try { r=calculate(inputModel()); } catch { break; } const a=appliedOf(r); for(const key of ['front','rear']){ a[key].sign=r[key]<0?-1:1; a[key].value=correction(r[key]).amount; } saveApplied(); const y=window.scrollY; render(false); window.scrollTo(0,y); break; }
     case 'haptics': haptics=!haptics; try{localStorage.setItem(HAPTIC_KEY, haptics?'on':'off');}catch{} if(haptics)buzz('tap'); { const y=window.scrollY; render(false); window.scrollTo(0,y); } break;
     case 'open-job': openJob=button.dataset.job; view='job'; render(); break;
@@ -442,6 +497,7 @@ app.addEventListener('input',event=>{
 app.addEventListener('focusin',event=>{ if(event.target.dataset?.dim)highlightDim(event.target.dataset.dim); });
 app.addEventListener('focusout',event=>{ if(event.target.dataset?.dim)highlightDim(''); });
 app.addEventListener('change',event=>{
+  if(event.target.id==='backup-file'){const file=event.target.files?.[0]; event.target.value=''; if(file)importBackup(file); return;}
   if(event.target.id==='sagMode'){state.sagMode=event.target.value;persist();document.querySelector('#sag-fields').hidden=state.sagMode!=='measured';}
 });
 app.addEventListener('submit',event=>{

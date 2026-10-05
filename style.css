@@ -132,3 +132,5 @@ h1:focus{outline:none}
 .basis{margin:4px 0 8px;padding-left:20px;font-size:.85rem;color:var(--muted)}.basis li{margin:2px 0}
 .applied .secondary{margin:4px 0 6px}.applied-foot{border-top:1px solid var(--line);margin-top:18px;padding-top:14px}.applied-foot h3{font-size:1.05rem;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;margin:0 0 4px}.applied-diff{min-height:1.4em;margin:8px 0 0;font-weight:700}
 .applied-facts{border-top:2px dashed var(--line);padding-top:6px}
+.home-tools{display:flex;flex-wrap:wrap;gap:12px;margin:6px 0 0}.home-tools .haptics{margin:0}
+.update-card{border-color:var(--ink);border-top-width:8px}.backup-status{min-height:1.4em;font-weight:800;color:var(--ink)}

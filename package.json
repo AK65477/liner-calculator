@@ -1,1 +1,1 @@
-{"name":"liner-alignment","version":"0.1.0","private":true,"type":"module","scripts":{"test":"node --test tests/calc.test.js tests/store.test.js","check":"node --check app.js && node --check calc.js && node --check store.js"}}
+{"name":"liner-alignment","version":"0.1.0","private":true,"type":"module","scripts":{"test":"node --test tests/calc.test.js tests/store.test.js","check":"node --check app.js && node --check calc.js && node --check store.js && node --check sw.js"}}

@@ -39,6 +39,17 @@ test('applied liner changes are kept with the round; malformed ones are rejected
   round.applied.rear.sign = 2; store.save(s, db);
   assert.equal(store.load(s, valid).notice, 'unreadable');
 });
+test('backup round-trips and merging only adds what is missing', () => {
+  const a = store.load(memory(), valid).db; store.newJob(a, input());
+  const b = store.load(memory(), valid).db; store.newJob(b, input());
+  const fromA = store.readBackup(store.backupText(a), valid);
+  store.addRound(fromA, fromA.jobs[0].id, input());
+  assert.deepEqual(store.mergeInto(b, fromA), { jobs: 1, rounds: 2 });
+  assert.equal(b.jobs.length, 2); assert.deepEqual(b.equipment.map(e => e.no), [1, 2]);
+  assert.deepEqual(store.mergeInto(b, fromA), { jobs: 0, rounds: 0 });
+  assert.throws(() => store.readBackup('{"app":"field-app","data":{}}', valid));
+  assert.throws(() => store.readBackup('not json', valid));
+});
 test('unreadable records are set aside, not overwritten', () => {
   const s = memory({ [store.KEY]: '{"version":2,"jobs":"broken"}' });
   const r = store.load(s, valid, new Date(1000));

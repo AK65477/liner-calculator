@@ -93,6 +93,38 @@ export function current(db) { return db.current ? findRound(db, db.current.jobId
 
 export function equipmentOf(db, job) { return db.equipment.find(e => e.id === job.equipmentId); }
 
+// Backup file: the whole record book, readable by readBackup on any phone.
+export function backupText(db, now = new Date()) {
+  return JSON.stringify({ app: 'field-app', kind: 'backup', exportedAt: now.toISOString(), data: db });
+}
+export function readBackup(text, validInput) {
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { throw new Error('백업 파일이 아님.'); }
+  const data = parsed?.app === 'field-app' ? parsed.data : parsed;
+  if (!validDb(data, validInput)) throw new Error('읽을 수 없는 백업 파일.');
+  return data;
+}
+// Adds what the phone does not have yet; never removes or overwrites local records.
+// Unnamed equipment that arrives gets the next local number so 「설비 N」 stays unique.
+export function mergeInto(db, incoming) {
+  const added = { jobs: 0, rounds: 0 };
+  const haveEq = new Set(db.equipment.map(e => e.id));
+  let next = db.equipment.reduce((max, e, i) => Math.max(max, e.no ?? i + 1), 0);
+  incoming.equipment.forEach(e => { if (!haveEq.has(e.id)) { db.equipment.push({ ...e, no: ++next }); haveEq.add(e.id); } });
+  for (const job of incoming.jobs) {
+    const local = db.jobs.find(j => j.id === job.id);
+    if (!local) { db.jobs.push(structuredClone(job)); added.jobs++; added.rounds += job.rounds.length; continue; }
+    const have = new Set(local.rounds.map(r => r.id));
+    const extra = job.rounds.filter(r => !have.has(r.id));
+    if (!extra.length) continue;
+    local.rounds.push(...structuredClone(extra));
+    local.rounds.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    added.rounds += extra.length;
+  }
+  db.jobs.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return added;
+}
+
 // The numbers as shown on the result screen, frozen with the round.
 export function snapshot(result) {
   return { consistent: result.consistent, front: result.front, rear: result.rear, checks: [...result.checks],
