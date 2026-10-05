@@ -1,11 +1,11 @@
 // Offline: every app file is stored on the phone at first visit, then served from there.
 // A new release installs in the background and waits; the page applies it only from the
 // first screen (never in the middle of a measurement). Bump VERSION with the ?v= numbers.
-const VERSION = 'v13';
+const VERSION = 'v14';
 const CACHE = `field-app-${VERSION}`;
 const FILES = [
   './', './index.html', './method.html', './manifest.webmanifest',
-  './style.css?v=13', './app.js?v=13', './calc.js?v=13', './store.js?v=13',
+  './style.css?v=14', './app.js?v=14', './calc.js?v=14', './store.js?v=14',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png',
 ];
 

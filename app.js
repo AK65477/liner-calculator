@@ -1,8 +1,8 @@
-import { calculate, parseDecimal, correction, sideMove, assess, TOLERANCES } from './calc.js?v=13';
-import * as store from './store.js?v=13';
+import { calculate, parseDecimal, correction, sideMove, assess, TOLERANCES } from './calc.js?v=14';
+import * as store from './store.js?v=14';
 
 const app = document.querySelector('#app');
-const empty = () => ({ step: 0, angle: 0, unit: 'mm', dims: { a: '', b: '', c: '' }, readings: { upper: ['', '', ''], lower: ['', '', ''] }, signs: { upper: [1, 1, 1], lower: [1, 1, 1] }, setup: false, positive: false, sagMode: 'unknown', sagUpper: '', sagLower: '', side90: '', rpm: '' });
+const empty = () => ({ step: 0, angle: 0, unit: 'mm', dims: { a: '', b: '', c: '' }, readings: { upper: ['', '', ''], lower: ['', '', ''] }, signs: { upper: [1, 1, 1], lower: [1, 1, 1] }, setup: false, positive: false, sagMode: 'unknown', sagUpper: '', sagLower: '', side90: '', rpm: '', back: { upper: '', lower: '' }, backSigns: { upper: 1, lower: 1 } });
 function validInput(s) {
   return Boolean(s) && [s.readings?.upper, s.readings?.lower, s.signs?.upper, s.signs?.lower].every(x => Array.isArray(x) && x.length === 3)
     && Boolean(s.dims) && [s.dims.a, s.dims.b, s.dims.c, s.sagUpper, s.sagLower, ...s.readings.upper, ...s.readings.lower].every(x => typeof x === 'string' && x.length <= 32)
@@ -10,10 +10,12 @@ function validInput(s) {
     && ['mm', 'div'].includes(s.unit) && ['unknown', 'measured', 'compensated'].includes(s.sagMode)
     && Number.isInteger(s.step) && s.step >= 0 && s.step <= 4 && Number.isInteger(s.angle) && s.angle >= 0 && s.angle <= 2
     && typeof s.setup === 'boolean' && typeof s.positive === 'boolean'
-    && ['', 'right', 'left'].includes(s.side90 ?? '') && ['', ...TOLERANCES.map(t => t.id)].includes(s.rpm ?? '');
+    && ['', 'right', 'left'].includes(s.side90 ?? '') && ['', ...TOLERANCES.map(t => t.id)].includes(s.rpm ?? '')
+    && (s.back === undefined || (typeof s.back.upper === 'string' && typeof s.back.lower === 'string' && s.back.upper.length <= 32 && s.back.lower.length <= 32))
+    && (s.backSigns === undefined || [s.backSigns.upper, s.backSigns.lower].every(x => x === 1 || x === -1));
 }
 // Older saves may lack side90/rpm; fill them while validating.
-const validStored = s => validInput(s) && ((s.side90 ??= ''), (s.rpm ??= ''), true);
+const validStored = s => validInput(s) && ((s.side90 ??= ''), (s.rpm ??= ''), (s.back ??= { upper: '', lower: '' }), (s.backSigns ??= { upper: 1, lower: 1 }), true);
 let storage;
 try { storage = window.localStorage; } catch { storage = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } }; }
 const loaded = store.load(storage, validStored);
@@ -294,7 +296,7 @@ function roundFacts(r) {
   const liner = v => { const x = correction(v); return `${x.amount} mm ${x.kind === 'remove' ? '빼기' : x.amount === '0.000' ? '그대로' : '넣기'}`; };
   const side = v => { const x = sideMove(v); return `${x.amount} mm ${x.action}`; };
   const h = r.result.horizontal;
-  return `<div class="facts"><div><span>앞발 라이너</span><span>${liner(r.result.front)}</span></div><div><span>뒷발 라이너</span><span>${liner(r.result.rear)}</span></div>${h ? `<div><span>앞발 좌우</span><span>${side(h.front)}</span></div><div><span>뒷발 좌우</span><span>${side(h.rear)}</span></div>` : ''}<div><span>거리 A / B / C</span><span>${esc(r.input.dims.a)} / ${esc(r.input.dims.b)} / ${esc(r.input.dims.c)} mm</span></div></div>${appliedFacts(r)}`;
+  return `<div class="facts"><div><span>앞발 라이너</span><span>${liner(r.result.front)}</span></div><div><span>뒷발 라이너</span><span>${liner(r.result.rear)}</span></div>${h ? `<div><span>앞발 좌우</span><span>${side(h.front)}</span></div><div><span>뒷발 좌우</span><span>${side(h.rear)}</span></div>` : ''}<div><span>거리 A / B / C</span><span>${esc(r.input.dims.a)} / ${esc(r.input.dims.b)} / ${esc(r.input.dims.c)} mm</span></div><div><span>0점 복귀</span><span>${backStatus(r.input).text}</span></div></div>${appliedFacts(r)}`;
 }
 // Optional name at the start of a job; empty keeps the running number (설비 N).
 function nameField() {
@@ -331,6 +333,41 @@ function inputModel() {
   const multiplier = state.unit === 'div' ? .01 : 1;
   return { ...Object.fromEntries(Object.entries(state.dims).map(([k,v]) => [k,parseDecimal(v)])), upper: state.readings.upper.map((v,i) => parseDecimal(v) * state.signs.upper[i] * multiplier), lower: state.readings.lower.map((v,i) => parseDecimal(v) * state.signs.lower[i] * multiplier), sagUpper: state.sagMode === 'measured' ? parseDecimal(state.sagUpper, { signed:true }) : 0, sagLower: state.sagMode === 'measured' ? parseDecimal(state.sagLower, { signed:true }) : 0, resolution:.01, side90: state.side90 || undefined };
 }
+// Measurement quality. After 270° one more quarter turn brings both dials back to the start;
+// they should read 0 again. A large return means the bracket or a dial slipped, so the
+// numbers above are not trustworthy. Same limit as the 90+270=180 sum check.
+function backValues(s) {
+  const mult = s.unit === 'div' ? .01 : 1;
+  return ['upper', 'lower'].map(d => { try { return parseDecimal(s.back?.[d]) * (s.backSigns?.[d] ?? 1) * mult; } catch { return null; } });
+}
+function backStatus(s, limit = .02) {
+  const v = backValues(s);
+  if (v.every(x => x === null)) return { kind: 'none', text: '미확인' };
+  const over = v.some(x => x !== null && Math.abs(x) > limit + 1e-9);
+  const parts = v.map((x, i) => x === null ? '' : `${i ? '아래' : '위'} ${signed(x)}`).filter(Boolean).join(' · ');
+  return { kind: over ? 'over' : v.includes(null) ? 'part' : 'ok', text: `${over ? '⚠' : '✓'} ${parts} mm` };
+}
+function qualityCard(result) {
+  const b = backStatus(state, result.checkLimit);
+  const sag = state.sagMode === 'unknown' ? '안 함' : state.sagMode === 'compensated' ? '값에 이미 반영' : '입력함';
+  const dial = (d, tag, k) => `<div class="back-dial ${k ? 'lower' : ''}"><p class="back-tag"><span class="dial-tag ${k ? 'lower' : ''}">${tag}</span> 게이지</p>
+    <div class="signs" role="group" aria-label="${tag} 게이지 복귀값 부호"><button type="button" class="sign" data-back-dial="${d}" data-back-sign="1" aria-pressed="${state.backSigns[d] === 1}">＋ 플러스</button><button type="button" class="sign" data-back-dial="${d}" data-back-sign="-1" aria-pressed="${state.backSigns[d] === -1}">− 마이너스</button></div>
+    <div class="unit-input"><input id="back-${d}" type="text" inputmode="decimal" maxlength="12" autocomplete="off" aria-label="${tag} 게이지 복귀값" value="${esc(state.back[d])}" placeholder="${state.unit === 'div' ? '칸' : 'mm'}"><span>${state.unit === 'div' ? '칸' : 'mm'}</span></div></div>`;
+  return `<section class="card quality" aria-labelledby="quality-title"><h2 id="quality-title">측정 상태</h2>
+  <div class="facts"><div><span>합계 검사 (90°+270°=180°)</span><span class="q-ok">✓ 위 ${result.checks[0].toFixed(3)} · 아래 ${result.checks[1].toFixed(3)}</span></div>
+  <div><span>한 바퀴 0점 복귀</span><span id="back-status" class="q-${b.kind}">${b.text}</span></div>
+  <div><span>처짐 보정</span><span>${sag}</span></div></div>
+  <p id="back-warn" class="error" ${b.kind === 'over' ? '' : 'hidden'}>0점 복귀 차이가 ${result.checkLimit.toFixed(2)} mm보다 큼. 지지대·게이지 고정 확인 후 재측정 권장.</p>
+  <details ${b.kind === 'none' ? '' : 'open'}><summary>0점 복귀값 입력 <span class="tiny">(선택)</span></summary>
+  <p class="helper">270°에서 ¼바퀴 더 돌려 처음 자리(0°)로. 두 게이지 값. 0에 가까우면 정상, 기준 ±${result.checkLimit.toFixed(2)} mm.</p>
+  ${dial('upper', '처음 위', 0)}${dial('lower', '처음 아래', 1)}</details></section>`;
+}
+function refreshBack() {
+  let limit = .02; try { limit = calculate(inputModel()).checkLimit; } catch {}
+  const b = backStatus(state, limit), el = document.getElementById('back-status'), warn = document.getElementById('back-warn');
+  if (el) { el.textContent = b.text; el.className = `q-${b.kind}`; }
+  if (warn) warn.hidden = b.kind !== 'over';
+}
 function results() {
   let result, model;
   try {
@@ -341,6 +378,7 @@ function results() {
   const feet = [['앞발','커플링 쪽'],['뒷발','반대쪽']];
   const h = result.horizontal;
   return `<h1>조정량</h1><p class="lead">현재 위치 기준 증감</p>
+  ${qualityCard(result)}
   <h2 class="result-heading">① 높이 · 라이너</h2>
   <div class="result-grid">${feet.map(([title,label],k) => { const x=correction(k ? result.rear : result.front); const verb = x.kind==='remove' ? '빼기' : x.amount==='0.000' ? '그대로' : '넣기'; return `<section class="card result ${x.kind}"><h2>${title} <span class="foot-label">${label}</span></h2><div class="result-number">${x.amount} <small>mm</small></div><div class="result-action ${x.kind}">${verb}</div></section>`; }).join('')}</div>
   <h2 class="result-heading">② 좌우 · 모터 이동</h2>
@@ -427,6 +465,11 @@ app.addEventListener('click', event => {
   const button=event.target.closest('button'); if (!button) return;
   buzz('tap');
   notice='';
+  if (button.dataset.backSign) {
+    state.backSigns[button.dataset.backDial] = Number(button.dataset.backSign); persist();
+    button.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));
+    refreshBack(); return;
+  }
   if (button.dataset.sign) {
     const dial=button.dataset.dial; state.signs[dial][state.angle]=Number(button.dataset.sign); persist();
     button.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));
@@ -453,6 +496,7 @@ app.addEventListener('click', event => {
     if(next!==state.unit){
       const factor=next==='div'?100:.01;
       for(const dial of ['upper','lower'])state.readings[dial]=state.readings[dial].map(v=>{try{return String(Number((parseDecimal(v)*factor).toFixed(8)));}catch{return v;}});
+      for(const dial of ['upper','lower'])try{state.back[dial]=String(Number((parseDecimal(state.back[dial])*factor).toFixed(8)));}catch{}
       state.unit=next; persist(); render(false);
     } return;
   }
@@ -490,6 +534,7 @@ app.addEventListener('input',event=>{
   if(el.dataset.equipment){const eq=db.equipment.find(e=>e.id===el.dataset.equipment);if(eq){eq.name=el.value.slice(0,60);if(!store.save(storage,db))storageOK=false;}return;}
   if(el.id.startsWith('dim-'))state.dims[el.name]=el.value;
   if(el.id.startsWith('read-'))state.readings[el.id.slice(5)][state.angle]=el.value;
+  if(el.id.startsWith('back-')){state.back[el.id.slice(5)]=el.value;persist();refreshBack();return;}
   if(['sagUpper','sagLower'].includes(el.id))state[el.id]=el.value;
   const box=el.closest('.invalid'); if(box)clearInvalid(box.parentElement);
   persist();

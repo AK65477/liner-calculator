@@ -134,3 +134,6 @@ h1:focus{outline:none}
 .applied-facts{border-top:2px dashed var(--line);padding-top:6px}
 .home-tools{display:flex;flex-wrap:wrap;gap:12px;margin:6px 0 0}.home-tools .haptics{margin:0}
 .update-card{border-color:var(--ink);border-top-width:8px}.backup-status{min-height:1.4em;font-weight:800;color:var(--ink)}
+.quality .facts{margin:6px 0 10px}.q-ok{color:var(--green)}.q-over{color:#8f241b}.q-none{color:var(--muted);font-weight:600}
+.back-dial{border-left:6px solid var(--blue);padding:4px 0 6px 12px;margin:14px 0}.back-dial.lower{border-left-color:var(--orange)}.back-tag{margin:0 0 4px;font-weight:800}
+.back-dial .signs{margin:8px 0}
